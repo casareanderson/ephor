@@ -207,6 +207,17 @@ permissions view at your real secret files, copy [`ephor.toml.example`](ephor.to
 - **Detect-only.** Ephor never blocks. If you need enforcement, pair it with a proxy or firewall.
 - **Linux only.** It depends on `/proc` and `ss`.
 
+## Roadmap
+
+- **Real-time anomaly watch (`ephor watch --loop`).** An opt-in continuous mode that re-samples on an interval and
+  alerts the moment an agent does something new or dangerous — a large transfer to a host it has never used, a
+  connection to a known-bad destination, or an unusual port — instead of waiting for the next scheduled scan. Alerts
+  go to a webhook (Discord/Slack/generic JSON) or to stdout/syslog. Constraints are hard: **stdlib only** (urllib for
+  the webhook, no new dependency), **still passive** (reads only `ss`/`/proc`, never blocks or kills), and the loop is
+  an **opt-in flag** — Ephor stays a one-shot tool with no resident daemon by default. Learn a per-agent baseline of
+  'normal' destinations over a short warm-up window, persist it in the existing SQLite history, and gate alerts behind
+  a simple threshold so a quiet box stays quiet. This is the headline v0.2 feature.
+
 ## Development
 
 ```bash
