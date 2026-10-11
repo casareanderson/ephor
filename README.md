@@ -216,7 +216,11 @@ permissions view at your real secret files, copy [`ephor.toml.example`](ephor.to
   the webhook, no new dependency), **still passive** (reads only `ss`/`/proc`, never blocks or kills), and the loop is
   an **opt-in flag** — Ephor stays a one-shot tool with no resident daemon by default. Learn a per-agent baseline of
   'normal' destinations over a short warm-up window, persist it in the existing SQLite history, and gate alerts behind
-  a simple threshold so a quiet box stays quiet. This is the headline v0.2 feature.
+  a simple threshold so a quiet box stays quiet. Each alert and each map entry carries the **originating host**
+  (which box/CT the agent runs on) and the **client binary** it used — `curl`, a headless `chromium`/Playwright,
+  python `requests`, `node`, etc. — read from `/proc`, so you can see *what* on *which machine* is talking. The
+  on-the-wire HTTP User-Agent is deliberately **out of scope** (it lives inside TLS; reading it needs a proxy, which
+  breaks Ephor's passive premise). This is the headline v0.2 feature.
 
 ## Development
 
