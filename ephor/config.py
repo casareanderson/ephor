@@ -67,3 +67,15 @@ def feed_ttl_hours() -> int:
         return int(CONF.get("feed_ttl_hours", 12))
     except (TypeError, ValueError):
         return 12
+
+
+def alert() -> dict:
+    """Settings for the opt-in `watch --loop` anomaly watch (all optional)."""
+    d = {
+        "warmup_seconds": 60,          # learn the per-agent baseline quietly, then start alerting
+        "large_transfer_bytes": 1048576,  # a 'new' destination only alerts once it pulls at least 1 MB
+        "webhook": "",                 # optional Discord/Slack/generic JSON alert sink
+        "syslog": False,               # also emit alerts to syslog
+    }
+    d.update({k: v for k, v in (CONF.get("alert") or {}).items()})
+    return d

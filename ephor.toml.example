@@ -38,3 +38,10 @@ threatfox = false
 # Files/dirs the permissions view checks each live agent can read (the "blast radius" view).
 # Point these at your real secrets so `ephor agent <name> --perms` tells you who can read them.
 # secret_paths = ["~/.env", "/run/secrets", "~/.aws/credentials", "~/.config/gh/hosts.yml"]
+
+# The opt-in anomaly watch (`ephor watch --loop`). All optional; the loop is off unless you pass --loop.
+# [alert]
+# webhook = "https://discord.com/api/webhooks/..."   # Discord/Slack/generic JSON alert sink (stdlib urllib)
+# syslog = false                                     # also emit alerts to syslog
+# warmup_seconds = 60                                # learn each agent's baseline quietly before alerting
+# large_transfer_bytes = 1048576                     # a 'new' destination only alerts once it pulls this much

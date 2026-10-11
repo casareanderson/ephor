@@ -73,7 +73,7 @@ Measured on the reference box (a Proxmox LXC, Python 3.12; your Pi will be in th
 | Metric | Value |
 | --- | --- |
 | Runtime dependencies | **0** (standard library only) |
-| Source | ~54 KB of Python across 11 small modules |
+| Source | ~67 KB of Python across 13 small modules |
 | Peak memory for one `ephor watch` | **~24 MB** RSS (≈22 MB is the Python interpreter itself) |
 | Time for one scan | **~1.4 s** (reading `/proc` + the socket table) |
 | Resident services | **none** — nothing runs between scans |
@@ -113,6 +113,9 @@ connections owned by other users; as a normal user it only sees your own.
 ```bash
 ephor watch                 # sample now, record where each agent went + how much it pulled
 ephor watch --resolve       # also reverse-DNS destinations (best-effort)
+ephor watch --loop          # real-time: re-sample on an interval, alerting on new/dangerous activity
+ephor watch --loop --interval 15                  # ...every 15 s
+ephor watch --loop --webhook https://discord.com/api/webhooks/...   # push alerts to a webhook
 ephor agents                # every agent seen, with download totals and bad-destination counts
 ephor agent ollama          # one agent's destinations
 ephor agent scraper --perms # ...plus its blast radius (user, caps, sudo, readable secrets)
@@ -144,6 +147,45 @@ Known-bad judgement comes from free, well-regarded public feeds, fetched at most
 - **ThreatFox** (abuse.ch) — broader IOC IPs (off by default; noisier)
 
 If the network is down, Ephor matches against the last good cache rather than failing.
+
+## Real-time anomaly watch (`ephor watch --loop`)
+
+`ephor watch` is one-shot by design; add `--loop` to turn it into a short, opt-in watch that re-samples on an
+interval (`--interval N`, default 30 s) and fires an alert the moment an agent does something new or dangerous:
+
+- a **large transfer to a host it has never used** — a destination outside its baseline pulling more than
+  `large_transfer_bytes`,
+- a **connection to a known-bad destination** — the same free threat-feed match as one-shot `watch`,
+- an **unusual port** — a port that agent hasn't used before.
+
+On startup the watch learns a per-agent baseline of "normal" destinations during a short **warm-up window**
+(`warmup_seconds`, default 60 s), persisted in the same SQLite history. Only known-bad matches alert during
+warm-up; the baseline anomalies are gated behind that window and the transfer threshold, so a quiet box stays
+quiet.
+
+Alerts go to a configurable sink: **stdout** (always), plus optionally a **webhook** (`--webhook URL` — Discord,
+Slack, or any generic JSON endpoint via stdlib `urllib`) and/or **syslog** (`--syslog`). Each alert carries the
+**originating host** (which box/CT), the **client binary** read from `/proc` (`curl`, headless
+`chromium`/Playwright/Puppeteer, python `requests`, `node`, …), and a **destination category**.
+
+Crawling is a first-class signal. Crawl/scrape clients (`chromium`/Playwright/Puppeteer, `crawl4ai`, `scrapy`,
+`crawlee`) are classified as their own `crawler:*` type, and known **crawl/scrape SaaS endpoints** (e.g.
+Firecrawl, Apify, ScrapingBee) are labelled as a `crawl-saas` destination category. Be honest about reach: a
+self-hosted crawler exposes every target site to Ephor, while a hosted crawl API only shows the call to it and
+the bytes returned — the pages it fetched happen off-box and are invisible to any passive host-side monitor.
+
+The on-the-wire HTTP User-Agent is deliberately out of scope: it lives inside TLS, and reading it would need a
+proxy, breaking Ephor's passive premise.
+
+Sinks and thresholds are configurable in `ephor.toml`:
+
+```toml
+[alert]
+webhook = "https://discord.com/api/webhooks/..."   # or Slack, or any JSON endpoint
+syslog = false
+warmup_seconds = 60
+large_transfer_bytes = 1048576
+```
 
 ## Power-user: VirusTotal (optional, off by default)
 
@@ -183,9 +225,10 @@ Enabling VirusTotal adds **no dependency** — it uses the same standard-library
 
 ## Configuration
 
-Everything works with no config. To add your own agent labels, tune the ignore list, pick feeds, or point the
-permissions view at your real secret files, copy [`ephor.toml.example`](ephor.toml.example) to `ephor.toml`,
-`~/.config/ephor/ephor.toml`, or `/etc/ephor/ephor.toml`.
+Everything works with no config. To add your own agent labels, tune the ignore list, pick feeds, point the
+permissions view at your real secret files, or set up the anomaly watch's alert sink and thresholds, copy
+[`ephor.toml.example`](ephor.toml.example) to `ephor.toml`, `~/.config/ephor/ephor.toml`, or
+`/etc/ephor/ephor.toml`.
 
 ## How it works
 
@@ -209,25 +252,10 @@ permissions view at your real secret files, copy [`ephor.toml.example`](ephor.to
 
 ## Roadmap
 
-- **Real-time anomaly watch (`ephor watch --loop`).** An opt-in continuous mode that re-samples on an interval and
-  alerts the moment an agent does something new or dangerous — a large transfer to a host it has never used, a
-  connection to a known-bad destination, or an unusual port — instead of waiting for the next scheduled scan. Alerts
-  go to a webhook (Discord/Slack/generic JSON) or to stdout/syslog. Constraints are hard: **stdlib only** (urllib for
-  the webhook, no new dependency), **still passive** (reads only `ss`/`/proc`, never blocks or kills), and the loop is
-  an **opt-in flag** — Ephor stays a one-shot tool with no resident daemon by default. Learn a per-agent baseline of
-  'normal' destinations over a short warm-up window, persist it in the existing SQLite history, and gate alerts behind
-  a simple threshold so a quiet box stays quiet. Each alert and each map entry carries the **originating host**
-  (which box/CT the agent runs on) and the **client binary** it used — `curl`, a headless `chromium`/Playwright,
-  python `requests`, `node`, etc. — read from `/proc`, so you can see *what* on *which machine* is talking. The
-  on-the-wire HTTP User-Agent is deliberately **out of scope** (it lives inside TLS; reading it needs a proxy, which
-  breaks Ephor's passive premise).
-
-  Crawling is a first-class signal: classify **crawl/scrape clients** (headless `chromium`/Playwright/Puppeteer,
-  `crawl4ai`, `scrapy`, tight `requests` loops) as their own type, and label known **crawl/scrape SaaS endpoints**
-  (e.g. Firecrawl) as a destination category, so "this agent is crawling — here's how much, and where" stands out.
-  Be honest about reach: a **self-hosted** crawler exposes every target site to Ephor directly, while a **hosted**
-  crawl API (Firecrawl) only shows the call to it and the bytes returned — the pages it fetched happen off-box and
-  are invisible to any passive host-side monitor. This is the headline v0.2 feature.
+- **Real-time anomaly watch** (`ephor watch --loop`) — the v0.2 headline feature, shipped. See
+  [Real-time anomaly watch](#real-time-anomaly-watch-ephor-watch---loop) above.
+- An ESP/embedded **hardware alert sink** (a buzzer or LED that Ephor pings over the LAN) — the add-on output
+  noted under *Runs on tiny hardware* above.
 
 ## Development
 

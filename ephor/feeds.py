@@ -29,7 +29,7 @@ FEEDS = {
     "threatfox": "https://threatfox.abuse.ch/export/csv/ip-port/recent/",
 }
 
-_UA = "ephor/0.1 (+https://github.com/)"
+_UA = "ephor/0.2 (+https://github.com/)"
 
 
 def _cache(name: str) -> Path:

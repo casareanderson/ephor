@@ -1,6 +1,7 @@
 """Command line. Detect-only: Ephor reports, it never blocks, kills or firewalls anything.
 
   ephor watch [--resolve] [--no-feeds]   take one sample, attribute it, fold it into history
+  ephor watch --loop [--interval N]      re-sample on an interval, alerting on new/dangerous activity
   ephor agents                           every agent seen, with destination count and bytes pulled
   ephor agent <name> [--perms]           one agent's destinations (and, with --perms, its blast radius)
   ephor history [--agent A] [--bad]      the destination log, newest first
@@ -44,6 +45,9 @@ def _fmt_bytes(n: int) -> str:
 
 
 def cmd_watch(args) -> int:
+    if args.loop:
+        from . import watch
+        return watch.run_loop(args)
     s = collect.sample()
     if not s.have_ss:
         print("ephor: 'ss' (iproute2) not found — cannot read the socket table", file=sys.stderr)
@@ -222,6 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--no-feeds", action="store_true", help="skip threat-feed matching this run")
     w.add_argument("--virustotal", action="store_true",
                    help="also enrich via VirusTotal (sends destinations to a third party; needs a key)")
+    w.add_argument("--loop", action="store_true",
+                   help="run continuously, re-sampling and alerting on new/dangerous activity")
+    w.add_argument("--interval", type=int, default=30, metavar="N",
+                   help="seconds between samples in --loop mode (default 30)")
+    w.add_argument("--webhook", help="POST alerts to a Discord/Slack/generic JSON webhook URL")
+    w.add_argument("--syslog", action="store_true", help="also emit alerts to syslog")
     w.add_argument("--json", action="store_true")
     w.set_defaults(func=cmd_watch)
 
