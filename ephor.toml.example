@@ -1,0 +1,40 @@
+# Ephor configuration — every key is optional. Copy to one of:
+#   ./ephor.toml   ~/.config/ephor/ephor.toml   /etc/ephor/ephor.toml
+# or point $EPHOR_CONFIG at it.
+
+# Where the history DB and feed cache live.
+# Default: /var/lib/ephor as root, else ~/.local/share/ephor
+# data_dir = "/var/lib/ephor"
+
+# How long a cached threat feed is reused before refetching.
+feed_ttl_hours = 12
+
+# Which feeds to use. urlhaus/feodo/firehol are on by default; threatfox is broader and noisier.
+[feeds]
+urlhaus = true
+feodo = true
+firehol = true
+threatfox = false
+
+# Extra agent classifiers, tried before the built-ins. `pattern` is a regex matched against the
+# full command line; `name` is the label. Use (capture) + {g1} in name to pull a group in.
+# [[agents]]
+# pattern = "my_trading_bot\\.py"
+# name = "trader"
+# [[agents]]
+# pattern = "myorchestrator --agent[= ]+(\\S+)"
+# name = "orch:{g1}"
+
+# Command lines to never track (added to the built-in ignore list). Substring, or /regex/.
+# ignore = ["backup-rsync", "/\\bnode_exporter\\b/"]
+
+# OPTIONAL: VirusTotal enrichment. OFF by default. When on, destinations (and any file hashes Ephor can
+# obtain) are sent to VirusTotal/Google — a third party — to enrich the free-feed verdict. The free feeds
+# keep working with no key, offline. Only turn this on if you accept that privacy trade-off.
+# [virustotal]
+# enabled = true
+# api_key = "YOUR_VT_API_KEY"   # or set the VT_API_KEY environment variable instead
+
+# Files/dirs the permissions view checks each live agent can read (the "blast radius" view).
+# Point these at your real secrets so `ephor agent <name> --perms` tells you who can read them.
+# secret_paths = ["~/.env", "/run/secrets", "~/.aws/credentials", "~/.config/gh/hosts.yml"]
