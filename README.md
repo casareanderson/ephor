@@ -220,7 +220,14 @@ permissions view at your real secret files, copy [`ephor.toml.example`](ephor.to
   (which box/CT the agent runs on) and the **client binary** it used — `curl`, a headless `chromium`/Playwright,
   python `requests`, `node`, etc. — read from `/proc`, so you can see *what* on *which machine* is talking. The
   on-the-wire HTTP User-Agent is deliberately **out of scope** (it lives inside TLS; reading it needs a proxy, which
-  breaks Ephor's passive premise). This is the headline v0.2 feature.
+  breaks Ephor's passive premise).
+
+  Crawling is a first-class signal: classify **crawl/scrape clients** (headless `chromium`/Playwright/Puppeteer,
+  `crawl4ai`, `scrapy`, tight `requests` loops) as their own type, and label known **crawl/scrape SaaS endpoints**
+  (e.g. Firecrawl) as a destination category, so "this agent is crawling — here's how much, and where" stands out.
+  Be honest about reach: a **self-hosted** crawler exposes every target site to Ephor directly, while a **hosted**
+  crawl API (Firecrawl) only shows the call to it and the bytes returned — the pages it fetched happen off-box and
+  are invisible to any passive host-side monitor. This is the headline v0.2 feature.
 
 ## Development
 
