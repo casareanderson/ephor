@@ -68,15 +68,19 @@ rather keep your trust.
 
 ### Footprint
 
-Measured on the reference box (figures reproduced by `scripts`/CI; see the release notes for the exact run):
+Measured on the reference box (a Proxmox LXC, Python 3.12; your Pi will be in the same ballpark):
 
 | Metric | Value |
 | --- | --- |
 | Runtime dependencies | **0** (standard library only) |
-| Install size (wheel) | a few tens of KB |
-| Memory for one `ephor watch` | tens of MB (a short-lived Python process) |
+| Source | ~54 KB of Python across 11 small modules |
+| Peak memory for one `ephor watch` | **~24 MB** RSS (≈22 MB is the Python interpreter itself) |
+| Time for one scan | **~1.4 s** (reading `/proc` + the socket table) |
 | Resident services | **none** — nothing runs between scans |
 | On-disk state | one SQLite file + small cached feed text files |
+
+In other words Ephor adds about **2 MB over bare Python** and runs for a second or two per sample. That's why
+a Pi Zero 2 W (512 MB) handles it comfortably on a one-minute timer.
 
 ## How it compares
 
