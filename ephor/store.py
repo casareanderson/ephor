@@ -118,6 +118,13 @@ def alerts(db, limit: int = 500) -> list[dict]:
     ).fetchall()]
 
 
+def baseline(db) -> list[tuple[str, str, int]]:
+    """Every (agent, dest, port) recorded so far — the 'normal' history the anomaly watch seeds its baseline from."""
+    return [(r["agent"], r["dest"], r["port"]) for r in db.execute(
+        "SELECT agent, dest, port FROM conns"
+    ).fetchall()]
+
+
 def stats(db) -> dict:
     with closing(db.cursor()) as cur:
         n_agents = cur.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
