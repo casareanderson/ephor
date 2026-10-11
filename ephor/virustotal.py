@@ -110,7 +110,7 @@ class VirusTotal:
     def _get(self, path: str) -> dict | None:
         if not self.key or not self._budget_left() or not self._ready():
             return None
-        req = urllib.request.Request(f"{_API}{path}", headers={"x-apikey": self.key, "User-Agent": "ephor/0.1"})
+        req = urllib.request.Request(f"{_API}{path}", headers={"x-apikey": self.key, "User-Agent": "ephor/0.2"})
         try:
             self._spend()
             with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310 (fixed VT host)
