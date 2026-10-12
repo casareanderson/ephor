@@ -22,7 +22,7 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 
-from . import collect, config, feeds, resolve, store
+from . import collect, config, feeds, resolve, store, supply
 
 try:
     import syslog
@@ -142,9 +142,10 @@ def analyze(*, agent: str, dest: str, ip: str, port: int, bytes_recv: int,
 
 
 def gate(reason: str | None, in_warmup: bool) -> bool:
-    """Should this reason be emitted right now? Known-bad alerts immediately; baseline anomalies wait out
-    the warm-up window so the box's normal startup traffic is learned quietly."""
-    return bool(reason) and (reason == KNOWN_BAD or not in_warmup)
+    """Should this reason be emitted right now? Known-bad (and the supply-chain alerts that are dangerous on
+    their own: malware, curl | sh, a lookalike name) fire immediately; baseline anomalies wait out the warm-up
+    window so the box's normal startup traffic is learned quietly."""
+    return bool(reason) and (reason == KNOWN_BAD or reason in supply.IMMEDIATE or not in_warmup)
 
 
 # --- alert + sinks ---------------------------------------------------------
@@ -165,22 +166,27 @@ class Alert:
     category: str = ""
     indicator: str = ""
     feed: str = ""
+    via: str = ""
+    detail: str = ""
 
     def as_dict(self) -> dict:
         return {
             "ts": self.ts, "host": self.host, "container": self.container,
-            "agent": self.agent, "client": self.client, "crawler": self.crawler,
+            "agent": self.agent, "via": self.via, "client": self.client, "crawler": self.crawler,
             "dest": self.dest, "ip": self.ip, "port": self.port,
             "bytes_recv": self.bytes_recv, "reason": self.reason,
-            "category": self.category, "indicator": self.indicator, "feed": self.feed,
+            "category": self.category, "indicator": self.indicator, "feed": self.feed, "detail": self.detail,
         }
 
 
 def format_line(a: Alert) -> str:
     who = a.host + (f"/{a.container}" if a.container else "")
+    via = f" via {a.via}" if a.via else ""
+    if not a.ip:                                   # supply-chain alerts: a command, a package or a name
+        return f"ephor: {a.reason.upper()} {who} {a.agent}{via} -> {a.dest}" + (f" ({a.detail})" if a.detail else "")
     cat = f" [{a.category}]" if a.category else ""
     extra = f" ({a.feed}:{a.indicator})" if a.feed else ""
-    return (f"ephor: {a.reason.upper()} {who} {a.agent} ({a.client}"
+    return (f"ephor: {a.reason.upper()} {who} {a.agent}{via} ({a.client}"
             f"{', crawler' if a.crawler else ''}) -> {a.dest}:{a.port}{cat}"
             f" {a.bytes_recv} bytes{extra}")
 
@@ -257,49 +263,82 @@ def run_loop(args) -> int:
     baseline = Baseline.load(db)
     alerted: set[tuple] = set()
     start = time.time()
-    print(f"ephor: watching every {interval}s (warm-up {warmup_seconds}s); Ctrl-C to stop", file=sys.stderr)
+    host = os.uname().nodename
+    now = int(time.time())
+    in_warmup = True
+
+    def emit(reason, *, agent, via="", container="", dest="", ip="", port=0, bytes_recv=0, client="",
+             indicator="", feed="", detail=""):
+        if not gate(reason, in_warmup):
+            return
+        key = (reason, agent, dest, port)
+        if key in alerted:
+            return
+        alerted.add(key)
+        if not ip:
+            store.record_alert(db, agent, dest, ip, reason, detail[:200], now)
+        alert = Alert(ts=now, host=host, container=container, agent=agent, client=client,
+                      crawler=is_crawler(client), dest=dest, ip=ip, port=port, bytes_recv=bytes_recv,
+                      reason=reason, category=dest_category(dest), indicator=indicator, feed=feed, via=via,
+                      detail=detail)
+        for sink in sinks:
+            sink.send(alert)
+
+    def on_conn(agent, via, container, ip, port, bytes_recv, client):
+        dest = resolve.ptr(ip) if args.resolve else ip
+        is_bad, indicator, feed = (False, "", "")
+        if matcher:
+            is_bad, indicator, feed = matcher.check(ip=ip, domain=dest if args.resolve else "")
+        store.record_agent(db, agent, now)
+        store.record_conn(db, agent, dest, ip, port, now, bytes_recv, is_bad, feed)
+        if is_bad:
+            store.record_alert(db, agent, dest, ip, feed, indicator, now)
+        reason = analyze(agent=agent, dest=dest, ip=ip, port=port, bytes_recv=bytes_recv, is_bad=is_bad,
+                         indicator=indicator, feed=feed, baseline=baseline, large_transfer_bytes=large_bytes)
+        baseline.learn(agent, dest, port)
+        if reason:
+            emit(reason, agent=agent, via=via, container=container, dest=dest, ip=ip, port=port,
+                 bytes_recv=bytes_recv, client=client, indicator=indicator, feed=feed)
+
+    extra = None
+    if getattr(args, "ebpf", False) or int(getattr(args, "inventory_every", 0) or 0) > 0:
+        if getattr(args, "ebpf", False):
+            from . import probe
+            why = probe.check()
+            if why:
+                print("ephor: --ebpf unavailable: " + "; ".join(why), file=sys.stderr)
+                db.close()
+                return 1
+        extra = supply.Supply(ebpf=bool(getattr(args, "ebpf", False)),
+                              inventory_every=int(getattr(args, "inventory_every", 0) or 0),
+                              pkg_checks=not (args.no_feeds or getattr(args, "no_pkg_checks", False)),
+                              use_sieve=bool(getattr(args, "sieve", False)), rdap=bool(getattr(args, "rdap", False)),
+                              matcher=matcher, roots=getattr(args, "inventory_root", None) or ["/"])
+    print(f"ephor: watching every {interval}s (warm-up {warmup_seconds}s)"
+          + (", eBPF probe on" if extra and extra.stream else "")
+          + (f", inventory every {extra.inventory_every}s" if extra and extra.inventory_every else "")
+          + "; Ctrl-C to stop", file=sys.stderr)
     try:
         while True:
             s = collect.sample()
             now = int(time.time())
-            if not s.have_ss:
+            in_warmup = (time.time() - start) < warmup_seconds
+            if not s.have_ss and not (extra and extra.stream):
                 print("ephor: 'ss' (iproute2) not found — cannot read the socket table", file=sys.stderr)
                 time.sleep(interval)
                 continue
-            in_warmup = (time.time() - start) < warmup_seconds
             with db:
                 for c in collect.attribute(s):
-                    dest = resolve.ptr(c.rip) if args.resolve else c.rip
-                    is_bad, indicator, feed = (False, "", "")
-                    if matcher:
-                        is_bad, indicator, feed = matcher.check(ip=c.rip, domain=dest if args.resolve else "")
-                    store.record_conn(db, c.agent, dest, c.rip, c.rport, now, c.bytes_recv, is_bad, feed)
-                    if is_bad:
-                        store.record_alert(db, c.agent, dest, c.rip, feed, indicator, now)
-                    client = client_binary(c.exe, c.cmd)
-                    reason = analyze(
-                        agent=c.agent, dest=dest, ip=c.rip, port=c.rport, bytes_recv=c.bytes_recv,
-                        is_bad=is_bad, indicator=indicator, feed=feed,
-                        baseline=baseline, large_transfer_bytes=large_bytes,
-                    )
-                    baseline.learn(c.agent, dest, c.rport)
-                    if not gate(reason, in_warmup):
-                        continue
-                    key = (reason, c.agent, dest, c.rport)
-                    if key in alerted:
-                        continue
-                    alerted.add(key)
-                    alert = Alert(
-                        ts=now, host=s.host, container=c.container, agent=c.agent,
-                        client=client, crawler=is_crawler(client), dest=dest, ip=c.rip,
-                        port=c.rport, bytes_recv=c.bytes_recv, reason=reason,
-                        category=dest_category(dest), indicator=indicator, feed=feed,
-                    )
-                    for sink in sinks:
-                        sink.send(alert)
+                    on_conn(c.agent, c.via, c.container, c.rip, c.rport, c.bytes_recv, client_binary(c.exe, c.cmd))
+                if extra:
+                    extra.handle_events(db, now, emit, on_conn)
+                    if extra.inventory_due():
+                        extra.inventory(db, now, emit)
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\nephor: watch stopped")
     finally:
+        if extra:
+            extra.stop()
         db.close()
     return 0

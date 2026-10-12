@@ -1,10 +1,17 @@
 """History — a tiny SQLite file (stdlib `sqlite3`, no server, no ORM).
 
-Each `watch` sample is folded into three tables:
+Each `watch` sample is folded into these tables:
 
   agents        one row per agent label: first/last seen, how many samples it appeared in
   conns         one row per (agent, dest, port): first/last seen, sample count, bytes received, bad flag
-  alerts        one row per (agent, dest, feed) when a destination matched a threat feed
+  alerts        one row per (agent, dest, feed) when a destination or name matched a feed or a check
+  dns           one row per (agent, name): names an agent looked up (eBPF probe or dns-proxy)
+  execs         one row per (agent, command): commands a named agent started (eBPF probe)
+  installs      one row per install command seen (pip/npm/brew/apt/... or curl | sh), with the agent
+  packages      what is installed where, from inventory snapshots: first seen, gone, and which agents were
+                active when it appeared
+
+`ephor query "SELECT ..."` runs read-only SQL over all of them.
 
 The design is deliberately boring: upserts keyed on the natural identity of a thing, counters that only go up,
 and a single file you can copy, inspect with the `sqlite3` CLI, or delete to reset. No migrations engine —
@@ -33,6 +40,25 @@ CREATE TABLE IF NOT EXISTS alerts (
   agent TEXT, dest TEXT, ip TEXT, feed TEXT, indicator TEXT,
   first_seen INTEGER, last_seen INTEGER, times_seen INTEGER DEFAULT 0,
   PRIMARY KEY (agent, dest, feed)
+);
+CREATE TABLE IF NOT EXISTS dns (
+  agent TEXT, via TEXT DEFAULT '', name TEXT, container TEXT DEFAULT '',
+  first_seen INTEGER, last_seen INTEGER, times_seen INTEGER DEFAULT 0, flags TEXT DEFAULT '',
+  PRIMARY KEY (agent, name)
+);
+CREATE TABLE IF NOT EXISTS execs (
+  agent TEXT, via TEXT DEFAULT '', cmd TEXT, container TEXT DEFAULT '',
+  first_seen INTEGER, last_seen INTEGER, times_seen INTEGER DEFAULT 0,
+  PRIMARY KEY (agent, cmd)
+);
+CREATE TABLE IF NOT EXISTS installs (
+  ts INTEGER, agent TEXT, via TEXT DEFAULT '', manager TEXT, packages TEXT, cmd TEXT, container TEXT DEFAULT '',
+  flags TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS packages (
+  root TEXT, manager TEXT, name TEXT, version TEXT, location TEXT,
+  first_seen INTEGER, gone_at INTEGER, baseline INTEGER DEFAULT 0, agents TEXT DEFAULT '', flags TEXT DEFAULT '',
+  PRIMARY KEY (root, manager, name, version, location)
 );
 CREATE INDEX IF NOT EXISTS conns_agent ON conns(agent);
 CREATE INDEX IF NOT EXISTS conns_bad ON conns(bad);
@@ -136,3 +162,88 @@ def stats(db) -> dict:
         "agents": n_agents, "destinations": n_conns, "bad_destinations": n_bad,
         "alerts": n_alerts, "last_sample": last or 0, "now": int(time.time()),
     }
+
+
+def record_dns(db, agent, via, name, container, ts, flags="") -> None:
+    db.execute(
+        """INSERT INTO dns(agent,via,name,container,first_seen,last_seen,times_seen,flags) VALUES(?,?,?,?,?,?,1,?)
+           ON CONFLICT(agent,name) DO UPDATE SET last_seen=excluded.last_seen, times_seen=times_seen+1,
+             via=excluded.via, flags=CASE WHEN excluded.flags!='' THEN excluded.flags ELSE flags END""",
+        (agent, via, name, container, ts, ts, flags),
+    )
+
+
+def record_exec(db, agent, via, cmd, container, ts) -> None:
+    db.execute(
+        """INSERT INTO execs(agent,via,cmd,container,first_seen,last_seen,times_seen) VALUES(?,?,?,?,?,?,1)
+           ON CONFLICT(agent,cmd) DO UPDATE SET last_seen=excluded.last_seen, times_seen=times_seen+1""",
+        (agent, via, cmd[:500], container, ts, ts),
+    )
+
+
+def record_install(db, ts, agent, via, manager, packages, cmd, container, flags="") -> None:
+    db.execute("INSERT INTO installs(ts,agent,via,manager,packages,cmd,container,flags) VALUES(?,?,?,?,?,?,?,?)",
+               (ts, agent, via, manager, " ".join(packages), cmd[:500], container, flags))
+
+
+def known_packages(db, root: str) -> set:
+    return {(r["manager"], r["name"], r["version"], r["location"]) for r in db.execute(
+        "SELECT manager,name,version,location FROM packages WHERE root=? AND gone_at IS NULL", (root,))}
+
+
+def has_inventory(db, root: str) -> bool:
+    return db.execute("SELECT 1 FROM packages WHERE root=? LIMIT 1", (root,)).fetchone() is not None
+
+
+def add_packages(db, root, pkgs, ts, baseline=False, agents="") -> None:
+    db.executemany(
+        """INSERT INTO packages(root,manager,name,version,location,first_seen,gone_at,baseline,agents)
+           VALUES(?,?,?,?,?,?,NULL,?,?)
+           ON CONFLICT(root,manager,name,version,location) DO UPDATE SET gone_at=NULL""",
+        [(root, m, n, v, loc, ts, int(baseline), agents) for m, n, v, loc in pkgs],
+    )
+
+
+def flag_package(db, root, pkg, flags) -> None:
+    m, n, v, loc = pkg
+    db.execute("UPDATE packages SET flags=? WHERE root=? AND manager=? AND name=? AND version=? AND location=?",
+               (flags, root, m, n, v, loc))
+
+
+def gone_packages(db, root, pkgs, ts) -> None:
+    db.executemany(
+        "UPDATE packages SET gone_at=? WHERE root=? AND manager=? AND name=? AND version=? AND location=?",
+        [(ts, root, m, n, v, loc) for m, n, v, loc in pkgs],
+    )
+
+
+def recent_agents(db, since: int) -> list[str]:
+    """Agents seen doing anything since `since`, busiest first (for "who was active when this appeared")."""
+    rows = db.execute(
+        """SELECT agent, SUM(n) AS n FROM (
+             SELECT agent, COUNT(*) AS n FROM installs WHERE ts >= ? GROUP BY agent
+             UNION ALL SELECT agent, 1 FROM execs WHERE last_seen >= ?
+             UNION ALL SELECT agent, 1 FROM agents WHERE last_seen >= ?)
+           GROUP BY agent ORDER BY n DESC LIMIT 5""", (since, since, since)).fetchall()
+    return [r["agent"] for r in rows]
+
+
+def installs(db, limit: int = 200) -> list[dict]:
+    return [dict(r) for r in db.execute("SELECT * FROM installs ORDER BY ts DESC LIMIT ?", (limit,))]
+
+
+def new_packages(db, limit: int = 200) -> list[dict]:
+    return [dict(r) for r in db.execute(
+        "SELECT * FROM packages WHERE baseline=0 ORDER BY first_seen DESC LIMIT ?", (limit,))]
+
+
+def dns_names(db, agent: str | None = None, flagged: bool = False, limit: int = 500) -> list[dict]:
+    q, a = "SELECT * FROM dns WHERE 1=1", []
+    if agent:
+        q += " AND agent=?"
+        a.append(agent)
+    if flagged:
+        q += " AND flags!=''"
+    q += " ORDER BY last_seen DESC LIMIT ?"
+    a.append(limit)
+    return [dict(r) for r in db.execute(q, a)]

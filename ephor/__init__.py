@@ -4,4 +4,4 @@ No proxy, no agent, no daemon-in-your-traffic: it reads /proc and the socket tab
 connection to the agent that made it, records where each agent went and how much it pulled down, flags
 known-bad destinations against public threat feeds, and shows what each agent can actually access. Detect-only.
 """
-__version__ = "0.2.0"
+__version__ = "0.3.0"

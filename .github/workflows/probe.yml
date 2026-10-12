@@ -1,0 +1,63 @@
+name: probe
+# Build ephor-probe (static, x86_64 + aarch64), smoke-test it on the runner's kernel, and attach both binaries
+# with checksums to each published release. Public repo: GitHub-hosted runners, including arm64, are free.
+on:
+  push:
+    branches: [main]
+    paths: ["probe/**", ".github/workflows/probe.yml"]
+  pull_request:
+    paths: ["probe/**", ".github/workflows/probe.yml"]
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (static, in Alpine)
+        run: ./probe/build.sh
+      - name: Smoke test (load, attach, see an exec and a DNS lookup)
+        run: |
+          ./probe/ephor-probe -V
+          sudo sh -c "timeout 60 ./probe/ephor-probe /lib/$(uname -m)-linux-gnu/libc.so.6 > out.txt 2> err.txt" &
+          for i in $(seq 1 45); do grep -q attached err.txt 2>/dev/null && break; sleep 1; done
+          /bin/echo smoke-marker > /dev/null
+          getent ahosts example.com > /dev/null || true
+          sleep 2
+          sudo pkill -x ephor-probe || true
+          wait || true
+          cat err.txt
+          echo "events: $(grep -c . out.txt || true)"; grep -E "echo|getent|^D" out.txt | head -10 || true
+          grep -q "smoke-marker" out.txt
+          grep -q "^D.*example.com" out.txt
+      - name: Name and checksum
+        run: |
+          cp probe/ephor-probe ephor-probe-${{ matrix.arch }}
+          sha256sum ephor-probe-${{ matrix.arch }} > ephor-probe-${{ matrix.arch }}.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ephor-probe-${{ matrix.arch }}
+          path: ephor-probe-${{ matrix.arch }}*
+  release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" ephor-probe-* --repo "${{ github.repository }}"
