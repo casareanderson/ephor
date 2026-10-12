@@ -28,10 +28,12 @@ jobs:
       - name: Smoke test (load, attach, see an exec and a DNS lookup)
         run: |
           ./probe/ephor-probe -V
-          sudo sh -c "timeout 8 ./probe/ephor-probe /lib/$(uname -m)-linux-gnu/libc.so.6 > out.txt 2> err.txt" &
-          sleep 4
+          sudo sh -c "timeout 60 ./probe/ephor-probe /lib/$(uname -m)-linux-gnu/libc.so.6 > out.txt 2> err.txt" &
+          for i in $(seq 1 45); do grep -q attached err.txt 2>/dev/null && break; sleep 1; done
           /bin/echo smoke-marker > /dev/null
           getent hosts example.com > /dev/null || true
+          sleep 2
+          sudo pkill -x ephor-probe || true
           wait || true
           cat err.txt
           grep -q "smoke-marker" out.txt
