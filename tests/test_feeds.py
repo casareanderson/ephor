@@ -6,7 +6,8 @@ def _write_cache(name, text):
 
 
 def test_matcher_ip_feed(monkeypatch):
-    monkeypatch.setattr(config, "feeds_enabled", lambda: {"feodo": True, "urlhaus": False, "firehol": False, "threatfox": False})
+    monkeypatch.setattr(config, "feeds_enabled", lambda: {"feodo": True, "urlhaus": False, "firehol": False,
+                                                           "threatfox": False})
     _write_cache("feodo", "# Feodo\n45.142.212.61\n185.220.101.1\n")
     m = feeds.Matcher()
     bad, ind, feed = m.check(ip="45.142.212.61")
@@ -15,7 +16,8 @@ def test_matcher_ip_feed(monkeypatch):
 
 
 def test_matcher_domain_feed_and_parent(monkeypatch):
-    monkeypatch.setattr(config, "feeds_enabled", lambda: {"urlhaus": True, "feodo": False, "firehol": False, "threatfox": False})
+    monkeypatch.setattr(config, "feeds_enabled", lambda: {"urlhaus": True, "feodo": False, "firehol": False,
+                                                           "threatfox": False})
     _write_cache("urlhaus", "http://evil.example/malware.bin\nhttps://bad.test:8080/x\n")
     m = feeds.Matcher()
     assert m.check(domain="evil.example")[0]
@@ -24,7 +26,8 @@ def test_matcher_domain_feed_and_parent(monkeypatch):
 
 
 def test_matcher_firehol_cidr(monkeypatch):
-    monkeypatch.setattr(config, "feeds_enabled", lambda: {"firehol": True, "urlhaus": False, "feodo": False, "threatfox": False})
+    monkeypatch.setattr(config, "feeds_enabled", lambda: {"firehol": True, "urlhaus": False, "feodo": False,
+                                                           "threatfox": False})
     _write_cache("firehol", "# level1\n203.0.113.0/24\n198.51.100.5\n")
     m = feeds.Matcher()
     bad, ind, feed = m.check(ip="203.0.113.77")
@@ -33,13 +36,15 @@ def test_matcher_firehol_cidr(monkeypatch):
 
 
 def test_matcher_total(monkeypatch):
-    monkeypatch.setattr(config, "feeds_enabled", lambda: {"feodo": True, "urlhaus": False, "firehol": False, "threatfox": False})
+    monkeypatch.setattr(config, "feeds_enabled", lambda: {"feodo": True, "urlhaus": False, "firehol": False,
+                                                           "threatfox": False})
     _write_cache("feodo", "1.2.3.4\n5.6.7.8\n")
     assert feeds.Matcher().total() == 2
 
 
 def test_refresh_offline_falls_back_to_cache(monkeypatch):
-    monkeypatch.setattr(config, "feeds_enabled", lambda: {"feodo": True, "urlhaus": False, "firehol": False, "threatfox": False})
+    monkeypatch.setattr(config, "feeds_enabled", lambda: {"feodo": True, "urlhaus": False, "firehol": False,
+                                                           "threatfox": False})
     _write_cache("feodo", "1.2.3.4\n")
 
     def boom(url):

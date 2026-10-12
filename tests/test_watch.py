@@ -193,3 +193,11 @@ def test_make_sinks():
     sinks = watch.make_sinks(webhook="https://example.com/hook", use_syslog=True)
     kinds = [type(s).__name__ for s in sinks]
     assert kinds == ["StdoutSink", "WebhookSink", "SyslogSink"]
+
+
+def test_webhook_rejects_non_http_schemes():
+    import pytest
+    for bad in ("file:///etc/passwd", "ftp://example.com/x", "gopher://x"):
+        with pytest.raises(SystemExit):
+            watch.make_sinks(bad)
+    assert len(watch.make_sinks("https://discord.com/api/webhooks/1/x")) == 2

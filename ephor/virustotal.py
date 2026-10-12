@@ -110,10 +110,11 @@ class VirusTotal:
     def _get(self, path: str) -> dict | None:
         if not self.key or not self._budget_left() or not self._ready():
             return None
-        req = urllib.request.Request(f"{_API}{path}", headers={"x-apikey": self.key, "User-Agent": "ephor/0.2"})
+        hdrs = {"x-apikey": self.key, "User-Agent": "ephor/0.2"}
+        req = urllib.request.Request(f"{_API}{path}", headers=hdrs)  # noqa: S310 - fixed VirusTotal https host
         try:
             self._spend()
-            with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310 (fixed VT host)
+            with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310 - fixed VirusTotal https host
                 return json.loads(r.read().decode("utf-8", "replace"))
         except Exception:  # noqa: BLE001 — fail soft: VT down/4xx/quota -> no enrichment
             return None
@@ -160,7 +161,8 @@ class VirusTotal:
 
     @property
     def budget(self) -> dict:
-        return {"used_today": self.state.get("count", 0), "cap": _DAILY_CAP, "left": max(0, _DAILY_CAP - self.state.get("count", 0))}
+        used = self.state.get("count", 0)
+        return {"used_today": used, "cap": _DAILY_CAP, "left": max(0, _DAILY_CAP - used)}
 
 
 PRIVACY_WARNING = (

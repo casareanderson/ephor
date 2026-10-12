@@ -109,7 +109,8 @@ def cmd_agents(args) -> int:
     print(f"{'AGENT':<24} {'DESTS':>5} {'DOWNLOADED':>10} {'BAD':>3}  {'LAST SEEN':<10}")
     for r in rows:
         flag = f"\033[31m{r['bad_dests']}\033[0m" if r["bad_dests"] else "0"
-        print(f"{r['agent']:<24} {r['dests']:>5} {_fmt_bytes(r['bytes_recv']):>10} {flag:>3}  {_age(r['last_seen']):<10}")
+        print(f"{r['agent']:<24} {r['dests']:>5} {_fmt_bytes(r['bytes_recv']):>10} {flag:>3}  "
+              f"{_age(r['last_seen']):<10}")
     return EXIT_OK
 
 
@@ -189,8 +190,9 @@ def cmd_status(args) -> int:
     print(f"  alerts              : {st['alerts']}")
     print(f"  feed indicators     : {st['feed_indicators']}")
     vt_on = virustotal.enabled()
+    budget = virustotal.VirusTotal().budget if vt_on else None
     print(f"  virustotal          : {'on' if vt_on else 'off'}"
-          + (f" ({virustotal.VirusTotal().budget['left']}/{virustotal.VirusTotal().budget['cap']} left today)" if vt_on else ""))
+          + (f" ({budget['left']}/{budget['cap']} left today)" if budget else ""))
     print(f"  last sample         : {_age(st['last_sample'])}")
     print(f"  database            : {config.db_path()}")
     return EXIT_OK
