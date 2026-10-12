@@ -239,9 +239,9 @@ eBPF can, but loading eBPF programs needs a compiler, which the standard library
 separate probe and reads its output, and Ephor itself stays dependency-free. Two backends print the same events:
 
 - **[ephor-probe](probe/)**, the native probe: one ~2 MB static binary (x86_64 and arm64, attached to each
-  release with a checksum, or ). About **10 MB** of memory. Used whenever it is on PATH.
+  release with a checksum, or `./probe/build.sh`). About **10 MB** of memory. Used whenever it is on PATH.
 - **[bpftrace](https://github.com/bpftrace/bpftrace)**, the fallback: Ephor writes a small bpftrace program
-  (). One distro package, but about 110 MB of memory, because bpftrace carries a compiler.
+  (`ephor probe --print`). One distro package, but about 110 MB of memory, because bpftrace carries a compiler.
 
 The program (`ephor probe --print` shows it) reports three things, read-only:
 
