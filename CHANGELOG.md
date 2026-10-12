@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0
+## 0.3.0 (2026-10-12)
 
 Supply chain: what agents run, install and look up.
 
