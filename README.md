@@ -8,6 +8,8 @@ sees **every** outbound connection an agent makes regardless of how that agent w
 is no proxy to set up and nothing for an agent to opt out of or route around. It's **detect-only by design**:
 it reports, it never blocks, kills, or firewalls anything.
 
+Part of the [warden family](#the-warden-family): use it on its own, or alongside [warden](https://github.com/casareanderson/warden) and [sieve](https://github.com/casareanderson/sieve).
+
 ```
 $ ephor agents
 AGENT                    DESTS DOWNLOADED BAD  LAST SEEN
@@ -19,7 +21,7 @@ py:rss_fetch                 6      402.0KB   0  5m ago
 $ ephor agent scraper --perms
 == scraper: 38 destination(s) ==
 DESTINATION                               PORT DOWNLOADED  SEEN  FLAG
-45.142.212.61                              443      1.2KB     3  BAD:feodo
+203.0.113.61                              443      1.2KB     3  BAD:feodo
 cdn.example.com                            443      6.8MB    40
 ...
 == scraper: permissions (blast radius) ==
@@ -256,6 +258,19 @@ permissions view at your real secret files, or set up the anomaly watch's alert 
   [Real-time anomaly watch](#real-time-anomaly-watch-ephor-watch---loop) above.
 - An ESP/embedded **hardware alert sink** (a buzzer or LED that Ephor pings over the LAN) — the add-on output
   noted under *Runs on tiny hardware* above.
+
+## The warden family
+
+Three tools, one job: knowing what's actually happening on your homelab. Each one runs on its own, and warden is
+the big brother that brings it all into one place.
+
+| Tool | Watches | Runs as |
+|---|---|---|
+| **[warden](https://github.com/casareanderson/warden)** | The whole estate: intrusions, bans, vulnerabilities, patches and AI agents, in one console you review and approve from | A server + web console |
+| **[sieve](https://github.com/casareanderson/sieve)** | Known vulnerabilities in packages, container images and lockfiles (OSV.dev + CISA KEV + EPSS) | A CLI or GitHub Action: `pipx install sieve-scan` |
+| **[ephor](https://github.com/casareanderson/ephor)** | What the AI agents on a Linux box connect to, download and can access | A dependency-free CLI that runs down to a Pi Zero |
+
+sieve and ephor both started life inside warden and were pulled out so you can use just the piece you need.
 
 ## Development
 
