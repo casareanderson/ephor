@@ -243,7 +243,7 @@ separate probe and reads its output, and Ephor itself stays dependency-free. Two
 - **[bpftrace](https://github.com/bpftrace/bpftrace)**, the fallback: Ephor writes a small bpftrace program
   (`ephor probe --print`). One distro package, but about 110 MB of memory, because bpftrace carries a compiler.
 
-The program (`ephor probe --print` shows it) reports three things, read-only:
+Either backend reports three things, read-only:
 
 - every process start, with its parent, cgroup and full command line, read from the new process's memory, so
   even a sub-second command is caught
