@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 
@@ -213,6 +214,131 @@ def cmd_feeds(args) -> int:
     return EXIT_OK
 
 
+def cmd_query(args) -> int:
+    import sqlite3
+
+    from . import query
+    if args.schema:
+        print(query.schema())
+        return EXIT_OK
+    if not args.sql:
+        print("ephor: give a SELECT, or --schema to see the tables", file=sys.stderr)
+        return 1
+    try:
+        cols, rows = query.run(args.sql, limit=args.limit)
+    except sqlite3.Error as e:
+        print(f"ephor: {e}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps([dict(zip(cols, r, strict=True)) for r in rows], indent=1, default=str))
+    elif cols:
+        print(query.table(cols, rows))
+    return EXIT_OK
+
+
+def cmd_installs(args) -> int:
+    db = store.connect()
+    cmds, pkgs = store.installs(db, args.limit), store.new_packages(db, args.limit)
+    db.close()
+    if args.json:
+        print(json.dumps({"commands": cmds, "new_packages": pkgs}, indent=1))
+        return EXIT_OK
+    print(f"install commands ({len(cmds)}):")
+    for r in cmds:
+        flag = f"  \033[31m{r['flags']}\033[0m" if r["flags"] else ""
+        via = f" via {r['via']}" if r["via"] else ""
+        print(f"  {_age(r['ts']):<10} {r['agent']}{via:<14} {r['manager']:<8} {r['packages'][:60]}{flag}")
+    print(f"\nnew packages since the first snapshot ({len(pkgs)}):")
+    for r in pkgs:
+        flag = f"  \033[31m{r['flags']}\033[0m" if r["flags"] else ""
+        print(f"  {_age(r['first_seen']):<10} {r['root']:<10} {r['manager']}:{r['name']} {r['version']}"
+              f"  [{r['agents'] or 'no agent seen'}]{flag}")
+    return EXIT_OK
+
+
+def cmd_dns(args) -> int:
+    db = store.connect()
+    rows = store.dns_names(db, agent=args.agent, flagged=args.flagged, limit=args.limit)
+    db.close()
+    if args.json:
+        print(json.dumps(rows, indent=1))
+        return EXIT_OK
+    for r in rows:
+        flag = f"  \033[31m{r['flags']}\033[0m" if r["flags"] else ""
+        print(f"{_age(r['last_seen']):<10} {r['agent']:<20} {r['times_seen']:>5}  {r['name']}{flag}")
+    return EXIT_OK
+
+
+def cmd_probe(args) -> int:
+    from . import probe
+    if args.print:
+        print(probe.program(probe.libcs()))
+        return EXIT_OK
+    why = probe.check()
+    if args.check or why:
+        if why:
+            print("ephor: the eBPF probe can't run here:\n  - " + "\n  - ".join(why), file=sys.stderr)
+            return 1
+        libs = probe.libcs()
+        print(f"ephor: eBPF probe ready (bpftrace, BTF, root); DNS hooks on {len(libs)} libc file(s)")
+        return EXIT_OK
+    from . import lineage
+    st = probe.Stream()
+    res = lineage.Resolver()
+    print("ephor: probe running; Ctrl-C to stop", file=sys.stderr)
+    try:
+        while st.alive():
+            for ev in st.drain():
+                if ev.kind == "exec":
+                    res.note(ev.pid, ev.ppid, ev.cmd)
+                agent, via = res.resolve(ev.pid, ev.cmd if ev.kind == "exec" else "")
+                what = ev.cmd if ev.kind == "exec" else ev.name if ev.kind == "dns" else f"{ev.ip}:{ev.port}"
+                print(f"{ev.kind:<7} {ev.pid:>7} {agent}{' via ' + via if via else ''}  {what[:160]}", flush=True)
+            time.sleep(0.5)
+        print(f"ephor: probe stopped: {st.error()}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return EXIT_OK
+    finally:
+        st.stop()
+
+
+def cmd_dnsproxy(args) -> int:
+    from . import dnsproxy, lineage, supply, watch
+    matcher = None if args.no_feeds else feeds.Matcher()
+    sp = supply.Supply(ebpf=False, inventory_every=0, pkg_checks=False, use_sieve=False, rdap=args.rdap,
+                       matcher=matcher)
+    res = lineage.Resolver()
+    sinks = watch.make_sinks(args.webhook or "", args.syslog)
+    upstream = args.upstream or dnsproxy.upstream_from_resolv()
+    host = os.uname().nodename
+
+    def on_query(pid: int, name: str) -> None:
+        agent, via = res.resolve(pid) if pid else ("unknown", "")
+        db = store.connect()
+        now = int(time.time())
+
+        def emit(reason, *, agent, via="", container="", dest="", detail="", **_):
+            store.record_alert(db, agent, dest, "", reason, detail[:200], now)
+            a = watch.Alert(ts=now, host=host, container=container, agent=agent, client="", crawler=False,
+                            dest=dest, ip="", port=0, bytes_recv=0, reason=reason, via=via, detail=detail)
+            for s in sinks:
+                s.send(a)
+        with db:
+            sp.note_dns(db, now, agent, via, "", name, emit)
+        db.close()
+    print(f"ephor: dns-proxy on {args.listen} -> {upstream}; point the resolver at it. Ctrl-C to stop",
+          file=sys.stderr)
+    try:
+        dnsproxy.serve(args.listen, upstream, on_query)
+    except KeyboardInterrupt:
+        return EXIT_OK
+    except OSError as e:
+        print(f"ephor: dns-proxy: {e}", file=sys.stderr)
+        return 1
+    return EXIT_OK
+
+
 def cmd_serve(args) -> int:
     from . import serve as _serve
     return _serve.run(args.host, args.port)
@@ -235,6 +361,21 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--webhook", help="POST alerts to a Discord/Slack/generic JSON webhook URL")
     w.add_argument("--syslog", action="store_true", help="also emit alerts to syslog")
     w.add_argument("--json", action="store_true")
+    w.add_argument("--ebpf", action="store_true",
+                   help="with --loop: also read the eBPF probe (every command, DNS lookup and connection as it "
+                        "happens; needs root and bpftrace, run on the host)")
+    w.add_argument("--inventory-every", type=int, default=300, metavar="N",
+                   help="with --loop: snapshot installed packages every N seconds and alert on new ones "
+                        "(default 300, 0 = off)")
+    w.add_argument("--inventory-root", action="append", metavar="PATH",
+                   help="with --loop: snapshot packages under this root too (repeatable; default /, plus each "
+                        "container a named agent acts in, when --ebpf is on)")
+    w.add_argument("--no-pkg-checks", action="store_true",
+                   help="don't look new packages up on OSV.dev (malicious) or PyPI/npm (first published)")
+    w.add_argument("--sieve", action="store_true",
+                   help="run `sieve path` where new Python/npm packages land (needs sieve installed)")
+    w.add_argument("--rdap", action="store_true",
+                   help="look up when each new domain an agent resolves was registered (network, RDAP)")
     w.set_defaults(func=cmd_watch)
 
     a = sub.add_parser("agents", help="list all agents seen")
@@ -261,6 +402,40 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--refresh", action="store_true", help="force a refetch now")
     f.add_argument("--json", action="store_true")
     f.set_defaults(func=cmd_feeds)
+
+    q = sub.add_parser("query", help="read-only SQL over the history (osquery-style)")
+    q.add_argument("sql", nargs="?", help='e.g. "SELECT agent, name FROM dns WHERE flags != \'\'"')
+    q.add_argument("--schema", action="store_true", help="print the tables")
+    q.add_argument("--limit", type=int, default=1000, metavar="N")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(func=cmd_query)
+
+    i = sub.add_parser("installs", help="install commands agents ran, and packages that appeared")
+    i.add_argument("--limit", type=int, default=50, metavar="N")
+    i.add_argument("--json", action="store_true")
+    i.set_defaults(func=cmd_installs)
+
+    d = sub.add_parser("dns", help="names agents looked up (from --ebpf or dns-proxy)")
+    d.add_argument("--agent", help="filter to one agent")
+    d.add_argument("--flagged", action="store_true", help="only names a check flagged")
+    d.add_argument("--limit", type=int, default=200, metavar="N")
+    d.add_argument("--json", action="store_true")
+    d.set_defaults(func=cmd_dns)
+
+    pr = sub.add_parser("probe", help="the eBPF probe on its own: --check, --print, or stream events")
+    pr.add_argument("--check", action="store_true", help="can the probe run here?")
+    pr.add_argument("--print", action="store_true", help="print the bpftrace program it would run")
+    pr.set_defaults(func=cmd_probe)
+
+    dp = sub.add_parser("dns-proxy", help="opt-in local DNS forwarder that ties each name to the process "
+                                          "(for boxes without eBPF)")
+    dp.add_argument("--listen", default="127.0.0.1:5353", metavar="ADDR:PORT")
+    dp.add_argument("--upstream", metavar="IP", help="real resolver (default: first nameserver in resolv.conf)")
+    dp.add_argument("--no-feeds", action="store_true")
+    dp.add_argument("--rdap", action="store_true", help="also check how recently each domain was registered")
+    dp.add_argument("--webhook", help="POST alerts to a Discord/Slack/generic JSON webhook URL")
+    dp.add_argument("--syslog", action="store_true")
+    dp.set_defaults(func=cmd_dnsproxy)
 
     sv = sub.add_parser("serve", help="read-only HTML view (stdlib; bind to LAN only)")
     sv.add_argument("--host", default="127.0.0.1")

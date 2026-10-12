@@ -75,7 +75,7 @@ Measured on the reference box (a Proxmox LXC, Python 3.12; your Pi will be in th
 | Metric | Value |
 | --- | --- |
 | Runtime dependencies | **0** (standard library only) |
-| Source | ~67 KB of Python across 13 small modules |
+| Source | ~137 KB of Python across 21 small modules |
 | Peak memory for one `ephor watch` | **~24 MB** RSS (≈22 MB is the Python interpreter itself) |
 | Time for one scan | **~1.4 s** (reading `/proc` + the socket table) |
 | Resident services | **none** — nothing runs between scans |
@@ -125,6 +125,10 @@ ephor history --bad         # every known-bad destination ever recorded
 ephor status                # database + feed summary
 ephor feeds --refresh       # update the threat-feed cache now
 ephor serve                 # read-only HTML view on 127.0.0.1:8799 (stdlib only)
+ephor installs              # install commands agents ran, packages that appeared (v0.3)
+ephor dns --flagged         # names agents looked up that a check flagged (v0.3)
+ephor query "SELECT ..."    # read-only SQL over everything recorded (v0.3)
+ephor probe --check         # can the optional eBPF probe run here? (v0.3)
 ```
 
 Add `--json` to any read command for scripting. `ephor watch` **exits non-zero (2)** if it saw a connection to
@@ -136,7 +140,7 @@ a known-bad destination, so it drops straight into cron or a CI step:
 
 Because Ephor samples point-in-time state, run `watch` on a short interval (every minute is plenty on a
 homelab) for near-complete coverage. A connection that opens and closes entirely between two samples can be
-missed — that's the honest trade-off for needing no proxy and no kernel hooks.
+missed — that's the honest trade-off for needing no proxy and no kernel hooks. The optional eBPF probe in v0.3 (`watch --loop --ebpf`) closes most of that gap.
 
 ## Threat feeds
 
@@ -188,6 +192,96 @@ syslog = false
 warmup_seconds = 60
 large_transfer_bytes = 1048576
 ```
+
+## Supply chain: what agents run, install and look up (v0.3)
+
+A coding agent's riskiest moment is rarely a connection it makes itself. It's the `pip install` it runs, the
+`curl … | sh` it pastes, or the package name it half-remembers that someone has since registered. v0.3 watches
+those. Everything here is still detect-only: nothing is blocked, nothing is executed on Ephor's behalf.
+
+**Who started it.** Every process is followed up its parent chain to an agent Ephor recognises, so a `pip`
+talking to PyPI is reported as `opencode via pip`, not as a stray `other:pip`. This works in the default
+mode too: no eBPF needed.
+
+**What got installed.** With `watch --loop`, Ephor snapshots what is installed every 5 minutes
+(`--inventory-every`): Python site-packages (system, `/usr/local`, every user's `~/.local`, pipx venvs),
+global npm, Homebrew, dpkg and apk. A new package is reported with the agents that were active when it
+appeared. The first snapshot only learns. A snapshot of ~900 packages takes about 10 ms: it reads directory
+names and two small database files.
+
+**Is it dodgy?** New Python and npm packages, and the names in any install command, are looked up on
+[OSV.dev](https://osv.dev) (`malicious_package`: OpenSSF's malicious-packages list) and on PyPI/npm
+(`young_package`: first published under 30 days ago, the shape of "slopsquatting", where an attacker
+registers a name AI models tend to invent). Only the package name and version leave the box. `--no-pkg-checks`
+turns it off. With `--sieve`, and [sieve](https://github.com/casareanderson/sieve) installed, Ephor runs
+`sieve path` where new packages landed and reports new known-exploited or malicious findings.
+
+**What it looked up.** Each DNS name an agent resolves is checked offline:
+
+| reason | what it means |
+| --- | --- |
+| `dns_feed` | the name is on URLhaus or ThreatFox |
+| `dns_lookalike` | it borrows a registry's or code host's name without being it: `pypi-org.com`, `files-pythonhosted.net`, `npmjs-registry.com`, `githubusercontent.io`, `pypj.org` |
+| `dns_punycode` | an internationalised (`xn--`) label, the classic way to look like another name |
+| `dns_random` | a long, random-looking label, the shape malware-generated domains have |
+| `dns_young` | registered in the last 30 days (opt-in `--rdap`, asks RDAP) |
+| `doh` | a named agent connected to a DNS-over-HTTPS resolver, so its lookups skip the system resolver |
+
+They are heuristics. A name you use on purpose goes in `dns_allow = ["example.com"]` in the config.
+
+**Install alerts.** `install` when a named agent runs a package install, `pipe_to_shell` whenever a shell runs
+`curl|wget … | sh` (whoever ran it), `new_package`, `malicious_package`, `young_package`, `sieve`.
+
+### The eBPF probe (`watch --loop --ebpf`)
+
+Sampling `ss` and `/proc` can't see a `pip install` that finishes between two samples, or a DNS lookup at all.
+eBPF can, but loading eBPF programs needs a compiler, which the standard library doesn't have. So Ephor writes
+a small [bpftrace](https://github.com/bpftrace/bpftrace) program and reads its output: one optional package,
+and Ephor itself stays dependency-free.
+
+The program (`ephor probe --print` shows it) reports three things, read-only:
+
+- every process start, with its parent, cgroup and full command line, read from the new process's memory, so
+  even a sub-second command is caught
+- every DNS lookup made through libc `getaddrinfo`, with the process that asked. It hooks the host's libc and
+  the libc inside each running container
+- every outgoing TCP connection (SYN sent), so short-lived connections are seen too
+
+```bash
+ephor probe --check        # can it run here? (root, bpftrace, BTF)
+ephor probe                # stream the raw events, attributed to agents
+ephor watch --loop --ebpf  # the full watch with the probe on
+```
+
+It needs root, bpftrace 0.16+ and a kernel with BTF (standard since about 5.8). An unprivileged container
+can't load eBPF: run Ephor on the host, which sees every container's processes and labels them by container.
+On the reference box (Proxmox host, agents in an LXC) a live test caught an agent's `pip install
+requests==2.19.0`, a `curl | sh` and a lookup of `pypi-org.com`, each tied to the agent and its container.
+
+**The cost, measured on the reference box:** ephor ~29 MB RSS and ~1.5% CPU, plus bpftrace ~110 MB RSS (most of
+it is bpftrace's built-in compiler) and ~1% CPU. That is fine on a server or a Pi 4/5. On a Pi Zero, leave
+`--ebpf` off: inventory snapshots still catch every install, just not the exact command.
+
+### No eBPF? `ephor dns-proxy`
+
+An opt-in, stdlib UDP DNS forwarder. Point the resolver at it (`--listen 127.0.0.1:5353`, upstream defaults to
+your current nameserver). It passes every query on unchanged, ties each name to the asking process through its
+source port (`/proc/net/udp`), and runs the same checks. It's the only part of Ephor that sits in a traffic
+path, which is why it is separate and off by default. UDP only.
+
+### Ask it anything: `ephor query`
+
+Everything Ephor records is in one SQLite file, and `ephor query` runs read-only SQL over it, osquery-style:
+
+```bash
+ephor query --schema
+ephor query "SELECT agent, via, name FROM dns WHERE flags != '' ORDER BY last_seen DESC"
+ephor query "SELECT datetime(ts,'unixepoch'), agent, manager, packages FROM installs ORDER BY ts DESC LIMIT 20"
+ephor query "SELECT root, manager, name, version, agents FROM packages WHERE baseline = 0"
+```
+
+The file is opened read-only and an authorizer refuses anything but reading, so a query can't change history.
+`ephor installs` and `ephor dns` are the same data as ready-made lists.
 
 ## Power-user: VirusTotal (optional, off by default)
 
@@ -254,9 +348,9 @@ permissions view at your real secret files, or set up the anomaly watch's alert 
 
 ## Roadmap
 
-- **Real-time anomaly watch** (`ephor watch --loop`) — the v0.2 headline feature, shipped. See
-  [Real-time anomaly watch](#real-time-anomaly-watch-ephor-watch---loop) above.
-- An ESP/embedded **hardware alert sink** (a buzzer or LED that Ephor pings over the LAN) — the add-on output
+- **A native probe** to replace bpftrace in `--ebpf` mode: one small precompiled libbpf program per architecture,
+  the same three events, a few MB of memory instead of ~110 MB, so the eBPF view fits a Pi Zero too.
+- An ESP/embedded **hardware alert sink** (a buzzer or LED that Ephor pings over the LAN), the add-on output
   noted under *Runs on tiny hardware* above.
 
 ## The warden family

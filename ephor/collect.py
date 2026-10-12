@@ -20,7 +20,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 
-from . import classify
+from . import classify, lineage
 
 
 @dataclass
@@ -54,6 +54,7 @@ class AgentConn:
     rport: int
     bytes_recv: int
     container: str = ""
+    via: str = ""          # the process's own label when the agent is an ancestor (opencode via py:pip)
 
 
 # The peer endpoint is the addr:port immediately before `users:(`. Anchoring here is robust whether or not
@@ -175,15 +176,20 @@ def sample() -> Sample:
 def attribute(s: Sample) -> list[AgentConn]:
     """Join connections to processes and classify the owner. Ignored processes are dropped."""
     out: list[AgentConn] = []
+    resolver = lineage.Resolver()
+    me = os.getpid()
     for c in s.conns:
+        if c.pid == me:                       # Ephor's own feed / OSV lookups
+            continue
         p = s.procs.get(c.pid)
         if not p:
             continue
         uid, cmd, exe, cg = p
         if classify.ignored(cmd):
             continue
+        agent, via = resolver.resolve(c.pid, cmd, exe)
         out.append(AgentConn(
-            agent=classify.classify(cmd, exe),
+            agent=agent, via=via,
             pid=c.pid, uid=uid, user=username(uid), exe=exe, cmd=cmd,
             rip=c.rip, rport=c.rport, bytes_recv=c.bytes_recv,
             container=container_of(c.pid, cg),
