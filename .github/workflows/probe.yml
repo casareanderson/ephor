@@ -31,11 +31,12 @@ jobs:
           sudo sh -c "timeout 60 ./probe/ephor-probe /lib/$(uname -m)-linux-gnu/libc.so.6 > out.txt 2> err.txt" &
           for i in $(seq 1 45); do grep -q attached err.txt 2>/dev/null && break; sleep 1; done
           /bin/echo smoke-marker > /dev/null
-          getent hosts example.com > /dev/null || true
+          getent ahosts example.com > /dev/null || true
           sleep 2
           sudo pkill -x ephor-probe || true
           wait || true
           cat err.txt
+          echo "events: $(grep -c . out.txt || true)"; grep -E "echo|getent|^D" out.txt | head -10 || true
           grep -q "smoke-marker" out.txt
           grep -q "^D.*example.com" out.txt
       - name: Name and checksum
