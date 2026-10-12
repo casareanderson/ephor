@@ -286,3 +286,25 @@ def test_pipe_to_shell_only_from_a_shell():
 def test_container_label_from_probe_cgroup():
     from ephor import collect
     assert collect.container_of(1, "unified:/lxc/100/ns/.lxc") == "lxc:100"
+
+
+def test_probe_prefers_native_binary(tmp_path, monkeypatch):
+    exe = tmp_path / "ephor-probe"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setenv("EPHOR_PROBE", str(exe))
+    assert probe.native() == str(exe) and probe.backend() == "ephor-probe"
+    monkeypatch.setenv("EPHOR_PROBE", str(tmp_path / "missing"))
+    monkeypatch.setattr(probe.shutil, "which", lambda name: None)
+    assert probe.native() == "" and probe.backend() == ""
+
+
+def test_native_output_parses_like_bpftrace():
+    """Lines exactly as the native probe printed them in the live test on the reference box."""
+    ev = probe.parse_line("E\t4171351\t4171350\t100000\tpip\t/lxc/100/ns/.lxc\t/opt/sdv/bin/python3\\x00"
+                          "/opt/sdv/bin/pip\\x00install\\x00--dry-run\\x00requests==2.19.0\\x00")
+    assert ev.cgroup == "/lxc/100/ns/.lxc" and ev.argv[-1] == "requests==2.19.0"
+    from ephor import collect
+    assert collect.container_of(ev.pid, ev.cgroup) == "lxc:100"
+    assert probe.parse_line("D\t4171386\tgetent\t/lxc/100/ns/.lxc\tpypi-org.com").name == "pypi-org.com"
+    assert probe.parse_line("C\t4171351\tpip\t/lxc/100/ns/.lxc\t151.101.192.223\t443").port == 443

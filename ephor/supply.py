@@ -124,8 +124,7 @@ class Supply:
                          detail="DNS-over-HTTPS resolver: lookups bypass the system resolver")
 
     def _libcs_now(self) -> list[str]:
-        return [ln.split(":")[1] for ln in self.stream.src.splitlines() if ln.startswith("uprobe:")] \
-            if self.stream else []
+        return list(self.stream.libs) if self.stream else []
 
     def _exec(self, db, now: int, ev: probe.Event, emit) -> None:
         cmd = ev.cmd

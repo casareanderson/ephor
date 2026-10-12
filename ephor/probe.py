@@ -2,9 +2,15 @@
 
 Sampling `ss` and `/proc` misses anything that starts and finishes between two samples: a `pip install`, a
 `curl | sh`, a DNS lookup. eBPF sees those as they happen, but loading eBPF programs needs a compiler or libbpf,
-which plain Python doesn't have. So Ephor doesn't load them itself: it writes a small bpftrace program, runs
-`bpftrace` (one package on most distros) and reads its output line by line. bpftrace is optional; without it
-Ephor works exactly as before.
+which plain Python doesn't have. So Ephor doesn't load them itself. It runs one of two backends and reads their
+output line by line; both print the same lines:
+
+  ephor-probe   the native probe (probe/ in this repo): one ~2 MB static binary, ~10 MB of memory. Used when it
+                is on PATH, or wherever $EPHOR_PROBE points
+  bpftrace      the fallback: Ephor writes a small bpftrace program and runs it. One distro package, but
+                ~110 MB of memory (bpftrace carries a compiler)
+
+Neither is required; without them Ephor works exactly as before.
 
 What the program reports (all read-only; nothing is blocked, changed or written to by the probe):
 
@@ -147,13 +153,23 @@ tracepoint:sock:inet_sock_set_state
     return "".join(parts)
 
 
+def native() -> str:
+    """Path of the native ephor-probe binary, or ''."""
+    p = os.environ.get("EPHOR_PROBE") or shutil.which("ephor-probe") or ""
+    return p if p and os.access(p, os.X_OK) else ""
+
+
+def backend() -> str:
+    return "ephor-probe" if native() else "bpftrace" if shutil.which("bpftrace") else ""
+
+
 def check() -> list[str]:
     """Why the probe can't run here ([] means it can)."""
     why = []
     if os.geteuid() != 0:
         why.append("needs root (eBPF programs can only be loaded by root)")
-    if not shutil.which("bpftrace"):
-        why.append("bpftrace is not installed (apt/dnf install bpftrace)")
+    if not backend():
+        why.append("no probe backend: put ephor-probe on PATH (see probe/ in the repo) or install bpftrace")
     if not os.path.exists("/sys/kernel/btf/vmlinux"):
         why.append("kernel has no BTF (/sys/kernel/btf/vmlinux missing)")
     if os.path.exists("/proc/1/environ") and _in_unprivileged_container():
@@ -177,10 +193,16 @@ class Stream:
     def __init__(self, libc_paths: list[str] | None = None, maxsize: int = 50000) -> None:
         self.q: queue.Queue[Event] = queue.Queue(maxsize=maxsize)
         self.dropped = 0
-        self.src = program(libcs() if libc_paths is None else libc_paths)
-        self.proc = subprocess.Popen(["bpftrace", "-q", "-B", "line", "-e", self.src],  # noqa: S607
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
-                                     errors="replace")
+        self.libs = libcs() if libc_paths is None else libc_paths
+        exe = native()
+        if exe:
+            self.backend, self.src = "ephor-probe", ""
+            argv = [exe, *self.libs]
+        else:
+            self.backend, self.src = "bpftrace", program(self.libs)
+            argv = ["bpftrace", "-q", "-B", "line", "-e", self.src]
+        self.proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # noqa: S603
+                                     text=True, bufsize=1, errors="replace")
         self.t = threading.Thread(target=self._pump, daemon=True)
         self.t.start()
 

@@ -13,7 +13,9 @@ Supply chain: what agents run, install and look up.
 - **DNS checks:** feeds, lookalikes of registries and code hosts, punycode, random-looking names, DoH bypass,
   optional registration age (`--rdap`); `dns_allow` in the config.
 - **eBPF probe** (`watch --loop --ebpf`, `ephor probe`): process starts with full command lines, libc DNS
-  lookups (host and every container) and TCP connects, through bpftrace. Optional; needs root and BTF.
+  lookups (host and every container) and TCP connects. Backends: the native **ephor-probe** (probe/, ~2 MB static
+  binary, ~10 MB RSS, x86_64 + arm64 built by CI and attached to releases) or bpftrace as a fallback. Optional;
+  needs root and BTF.
 - **`ephor dns-proxy`:** opt-in UDP DNS forwarder that ties names to processes on boxes without eBPF.
 - **`ephor query`:** read-only SQL over the history; `ephor installs`, `ephor dns`.
 - Ephor's own connections (feed and OSV lookups) are no longer reported.

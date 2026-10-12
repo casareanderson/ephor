@@ -235,9 +235,13 @@ They are heuristics. A name you use on purpose goes in `dns_allow = ["example.co
 ### The eBPF probe (`watch --loop --ebpf`)
 
 Sampling `ss` and `/proc` can't see a `pip install` that finishes between two samples, or a DNS lookup at all.
-eBPF can, but loading eBPF programs needs a compiler, which the standard library doesn't have. So Ephor writes
-a small [bpftrace](https://github.com/bpftrace/bpftrace) program and reads its output: one optional package,
-and Ephor itself stays dependency-free.
+eBPF can, but loading eBPF programs needs a compiler, which the standard library doesn't have. So Ephor runs a
+separate probe and reads its output, and Ephor itself stays dependency-free. Two backends print the same events:
+
+- **[ephor-probe](probe/)**, the native probe: one ~2 MB static binary (x86_64 and arm64, attached to each
+  release with a checksum, or ). About **10 MB** of memory. Used whenever it is on PATH.
+- **[bpftrace](https://github.com/bpftrace/bpftrace)**, the fallback: Ephor writes a small bpftrace program
+  (). One distro package, but about 110 MB of memory, because bpftrace carries a compiler.
 
 The program (`ephor probe --print` shows it) reports three things, read-only:
 
@@ -253,14 +257,15 @@ ephor probe                # stream the raw events, attributed to agents
 ephor watch --loop --ebpf  # the full watch with the probe on
 ```
 
-It needs root, bpftrace 0.16+ and a kernel with BTF (standard since about 5.8). An unprivileged container
+It needs root, ephor-probe or bpftrace 0.16+, and a kernel with BTF (standard since about 5.8). An unprivileged container
 can't load eBPF: run Ephor on the host, which sees every container's processes and labels them by container.
 On the reference box (Proxmox host, agents in an LXC) a live test caught an agent's `pip install
 requests==2.19.0`, a `curl | sh` and a lookup of `pypi-org.com`, each tied to the agent and its container.
 
-**The cost, measured on the reference box:** ephor ~29 MB RSS and ~1.5% CPU, plus bpftrace ~110 MB RSS (most of
-it is bpftrace's built-in compiler) and ~1% CPU. That is fine on a server or a Pi 4/5. On a Pi Zero, leave
-`--ebpf` off: inventory snapshots still catch every install, just not the exact command.
+**The cost, measured on the reference box:** ephor ~29 MB RSS and ~1.5% CPU, plus the probe: **ephor-probe ~10 MB
+and ~1.4% CPU**, or bpftrace ~110 MB and ~1% CPU. With ephor-probe the eBPF view fits small boards too, as long as
+the kernel has BTF. Without BTF, leave `--ebpf` off: inventory snapshots still catch every install, just not
+the exact command.
 
 ### No eBPF? `ephor dns-proxy`
 
@@ -348,8 +353,6 @@ permissions view at your real secret files, or set up the anomaly watch's alert 
 
 ## Roadmap
 
-- **A native probe** to replace bpftrace in `--ebpf` mode: one small precompiled libbpf program per architecture,
-  the same three events, a few MB of memory instead of ~110 MB, so the eBPF view fits a Pi Zero too.
 - An ESP/embedded **hardware alert sink** (a buzzer or LED that Ephor pings over the LAN), the add-on output
   noted under *Runs on tiny hardware* above.
 

@@ -280,7 +280,9 @@ def cmd_probe(args) -> int:
             print("ephor: the eBPF probe can't run here:\n  - " + "\n  - ".join(why), file=sys.stderr)
             return 1
         libs = probe.libcs()
-        print(f"ephor: eBPF probe ready (bpftrace, BTF, root); DNS hooks on {len(libs)} libc file(s)")
+        light = "" if probe.native() else " (install ephor-probe for ~10 MB instead of ~110 MB)"
+        print(f"ephor: eBPF probe ready: backend {probe.backend()}{light}, root, BTF; "
+              f"DNS hooks on {len(libs)} libc file(s)")
         return EXIT_OK
     from . import lineage
     st = probe.Stream()
