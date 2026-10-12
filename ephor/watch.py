@@ -98,7 +98,7 @@ class Baseline:
     ports: dict[str, set[int]] = field(default_factory=dict)
 
     @classmethod
-    def load(cls, db) -> "Baseline":
+    def load(cls, db) -> Baseline:
         b = cls()
         for agent, dest, port in store.baseline(db):
             b.dests.setdefault(agent, set()).add(dest)
@@ -203,6 +203,8 @@ class SyslogSink:
 
 class WebhookSink:
     def __init__(self, url: str) -> None:
+        if not url.lower().startswith(("https://", "http://")):
+            raise ValueError(f"webhook must be an http(s) URL, got {url[:40]!r}")
         self.url = url
 
     def _payload(self, a: Alert) -> bytes:
@@ -217,18 +219,22 @@ class WebhookSink:
 
     def send(self, a: Alert) -> None:
         body = self._payload(a)
-        req = urllib.request.Request(self.url, data=body, headers={"Content-Type": "application/json"})
+        hdrs = {"Content-Type": "application/json"}
+        req = urllib.request.Request(self.url, data=body, headers=hdrs)  # noqa: S310 - http(s) only, see __init__
         try:
-            with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310 (user-configured webhook)
+            with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310 - http(s) only, see __init__
                 r.read()
-        except Exception:  # noqa: BLE001 — a webhook must never take the watch loop down
-            pass
+        except Exception as e:  # noqa: BLE001 — a webhook must never take the watch loop down
+            print(f"ephor: webhook send failed: {type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
 
 
 def make_sinks(webhook: str = "", use_syslog: bool = False) -> list:
     sinks: list = [StdoutSink()]
     if webhook:
-        sinks.append(WebhookSink(webhook))
+        try:
+            sinks.append(WebhookSink(webhook))
+        except ValueError as e:
+            raise SystemExit(f"ephor: {e}") from None
     if use_syslog:
         sinks.append(SyslogSink())
     return sinks

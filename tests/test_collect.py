@@ -3,13 +3,13 @@ from ephor import collect
 # Real-shape `ss -tnpiH state established` output: socket line then an indented info line.
 SS = """\
 ESTAB 0 0 10.0.0.5:51000 93.184.216.34:443 users:(("python3",pid=4242,fd=7))
-	 cubic wscale:7,7 rto:204 bytes_sent:900 bytes_received:204800 segs_out:12
+\t cubic wscale:7,7 rto:204 bytes_sent:900 bytes_received:204800 segs_out:12
 ESTAB 0 0 10.0.0.5:51002 192.168.0.10:5432 users:(("python3",pid=4242,fd=9))
-	 cubic bytes_received:10
+\t cubic bytes_received:10
 ESTAB 0 0 10.0.0.5:51004 140.82.121.4:443 users:(("node",pid=5555,fd=3))
-	 cubic bytes_received:1048576
+\t cubic bytes_received:1048576
 ESTAB 0 0 [::1]:8080 [2606:4700:4700::1111]:443 users:(("curl",pid=6001,fd=4))
-	 cubic bytes_received:512
+\t cubic bytes_received:512
 """
 
 

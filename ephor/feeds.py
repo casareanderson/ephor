@@ -46,8 +46,8 @@ def _fresh(name: str, ttl_h: int) -> bool:
 
 
 def _fetch(url: str) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 (fixed https feed URLs)
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})  # noqa: S310 - fixed https feed URLs
+    with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310 - fixed https feed URLs
         return r.read().decode("utf-8", "replace")
 
 

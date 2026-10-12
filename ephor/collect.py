@@ -154,7 +154,8 @@ def parse_ss(out: str, internet_only: bool = True) -> list[Conn]:
 
 def sample() -> Sample:
     """Take one point-in-time sample of established outbound connections, attributed to processes."""
-    s = Sample(ts=int(time.time()), host=os.uname().nodename, is_root=(os.geteuid() == 0), have_ss=bool(shutil.which("ss")))
+    s = Sample(ts=int(time.time()), host=os.uname().nodename, is_root=(os.geteuid() == 0),
+               have_ss=bool(shutil.which("ss")))
     if not s.have_ss:
         return s
     try:
