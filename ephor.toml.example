@@ -9,6 +9,12 @@
 # How long a cached threat feed is reused before refetching.
 feed_ttl_hours = 12
 
+# Supply-chain watch: `curl … | sh` pipes untrusted remote output straight into a shell, so it is blocked by
+# default (the process is killed) and the payload (URL + command) is quarantined to <data_dir>/quarantine.
+# block_pipe_to_shell = false   # alert only, don't kill
+# quarantine_dir = "/var/lib/ephor/quarantine"
+
+
 # Which feeds to use. urlhaus/feodo/firehol are on by default; threatfox is broader and noisier.
 [feeds]
 urlhaus = true
