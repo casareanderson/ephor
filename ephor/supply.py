@@ -9,7 +9,7 @@ Two sources feed it:
 and it turns them into alerts:
 
   install            a named agent ran a package install (pip, npm, brew, apt, cargo, go, gem...)
-  pipe_to_shell      something ran `curl ... | sh` (always alerts, whoever ran it)
+  pipe_to_shell      something ran `curl ... | sh` (always alerts and keeps a copy; block_pipe_to_shell also kills it)
   new_package        a package appeared since the last snapshot (with the agents active at the time)
   malicious_package  OSV.dev lists the package as malicious (MAL-*)
   young_package      the package was first published days ago
@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import glob
 import os
+import signal
 import sys
 import time
 
-from . import collect, dnscheck, installs, lineage, pkgcheck, probe, store
+from . import collect, config, dnscheck, installs, lineage, pkgcheck, probe, store
 
 INSTALL = "install"
 PIPE_TO_SHELL = "pipe_to_shell"
@@ -40,7 +41,8 @@ CHECKS_PER_SNAPSHOT = 60          # network lookups per snapshot, so an `apt upg
 
 class Supply:
     def __init__(self, *, ebpf: bool, inventory_every: int, pkg_checks: bool, use_sieve: bool, rdap: bool,
-                 matcher, roots: list[str] | None = None, proc: str = "/proc") -> None:
+                 matcher, roots: list[str] | None = None, proc: str = "/proc",
+                 block_pipe_to_shell: bool | None = None, quarantine_dir: str = "") -> None:
         self.proc = proc
         self.resolver = lineage.Resolver(proc)
         self.stream = probe.Stream() if ebpf else None
@@ -51,6 +53,8 @@ class Supply:
         self.use_sieve = use_sieve
         self.rdap = rdap
         self.matcher = matcher
+        self.block_pipe_to_shell = config.block_pipe_to_shell() if block_pipe_to_shell is None else block_pipe_to_shell
+        self.quarantine_dir = quarantine_dir or config.quarantine_dir()
         self.roots: dict[str, str] = {r if r != "/" else "host": r for r in (roots or ["/"])}
         self.container_pid: dict[str, int] = {}
         self.me = os.getpid()
@@ -90,6 +94,44 @@ class Supply:
         return ""
 
     # ------------------------------------------------------------ probe events
+
+    def _children(self, pid: int) -> list[int]:
+        out = []
+        for f in glob.glob(f"{self.proc}/{pid}/task/*/children"):
+            try:
+                out += [int(c) for c in open(f).read().split()]
+            except (OSError, ValueError):
+                pass
+        return out
+
+    def _block(self, pid: int) -> None:
+        """Kill the shell running the pipe and everything under it (curl, the inner sh).
+        Never the process group: in a script or a service that is the parent too.
+        The payload may already have started by the time the exec event arrives."""
+        if pid <= 1 or pid == self.me:
+            return
+        todo, seen = [pid], []
+        while todo and len(seen) < 64:
+            p = todo.pop()
+            if p > 1 and p != self.me and p not in seen:
+                seen.append(p)
+                todo += self._children(p)
+        for p in reversed(seen):           # children first
+            try:
+                os.kill(p, signal.SIGKILL)
+            except OSError:
+                pass
+
+    def _quarantine(self, payload: str, cmd: str, pid: int, agent: str, container: str, now: int) -> None:
+        """Keep the URL + command for inspection (0600: a command line can carry a token)."""
+        try:
+            os.makedirs(self.quarantine_dir, exist_ok=True)
+            path = os.path.join(self.quarantine_dir, f"{now}-{pid}.txt")
+            with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as f:
+                f.write(f"# pipe_to_shell payload quarantined by ephor at {now}\n"
+                        f"agent: {agent}\ncontainer: {container or '-'}\nurl: {payload}\ncmd: {cmd}\n")
+        except OSError:
+            pass
 
     def handle_events(self, db, now: int, emit, on_conn) -> None:
         if not self.stream:
@@ -155,8 +197,11 @@ class Supply:
                          detail=detail)
         store.record_install(db, now, agent, via, ic.manager, ic.packages, cmd, container, ",".join(flags))
         if ic.manager == "pipe-to-shell":
+            self._quarantine(ic.packages[0], cmd, ev.pid, agent, container, now)
+            if self.block_pipe_to_shell:
+                self._block(ev.pid)
             emit(PIPE_TO_SHELL, agent=agent, via=via, container=container, dest=ic.packages[0],
-                 detail=cmd[:160])
+                 detail=cmd[:160] + (" (blocked)" if self.block_pipe_to_shell else ""))
         elif named:
             emit(INSTALL, agent=agent, via=via, container=container,
                  dest=f"{ic.manager}:{' '.join(ic.packages[:5])}", detail=cmd[:160])

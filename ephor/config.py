@@ -56,6 +56,19 @@ def secret_paths() -> list[str]:
     return [os.path.expanduser(p) for p in (CONF.get("secret_paths") or [])]
 
 
+def block_pipe_to_shell() -> bool:
+    """Whether `curl … | sh` is killed as well as alerted. Off by default: ephor watches, it does not act."""
+    return bool(CONF.get("block_pipe_to_shell", False))
+
+
+def quarantine_dir() -> str:
+    """Where pipe-to-shell payloads are written for inspection. Default: <data_dir>/quarantine."""
+    d = CONF.get("quarantine_dir")
+    if not d:
+        d = str(data_dir() / "quarantine")
+    return d
+
+
 def feeds_enabled() -> dict:
     f = {"urlhaus": True, "feodo": True, "firehol": True, "threatfox": False}
     f.update({k: bool(v) for k, v in (CONF.get("feeds") or {}).items()})
