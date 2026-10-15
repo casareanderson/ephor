@@ -9,7 +9,7 @@ Two sources feed it:
 and it turns them into alerts:
 
   install            a named agent ran a package install (pip, npm, brew, apt, cargo, go, gem...)
-  pipe_to_shell      something ran `curl ... | sh` (blocked by default and the payload quarantined)
+  pipe_to_shell      something ran `curl ... | sh` (always alerts and keeps a copy; block_pipe_to_shell also kills it)
   new_package        a package appeared since the last snapshot (with the agents active at the time)
   malicious_package  OSV.dev lists the package as malicious (MAL-*)
   young_package      the package was first published days ago
@@ -95,24 +95,39 @@ class Supply:
 
     # ------------------------------------------------------------ probe events
 
-    def _block(self, pid: int) -> None:
-        """Kill the process group running the pipe, so the untrusted payload never executes."""
-        if pid <= 1:
-            return
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
-        except OSError:
+    def _children(self, pid: int) -> list[int]:
+        out = []
+        for f in glob.glob(f"{self.proc}/{pid}/task/*/children"):
             try:
-                os.kill(pid, signal.SIGKILL)
+                out += [int(c) for c in open(f).read().split()]
+            except (OSError, ValueError):
+                pass
+        return out
+
+    def _block(self, pid: int) -> None:
+        """Kill the shell running the pipe and everything under it (curl, the inner sh).
+        Never the process group: in a script or a service that is the parent too.
+        The payload may already have started by the time the exec event arrives."""
+        if pid <= 1 or pid == self.me:
+            return
+        todo, seen = [pid], []
+        while todo and len(seen) < 64:
+            p = todo.pop()
+            if p > 1 and p != self.me and p not in seen:
+                seen.append(p)
+                todo += self._children(p)
+        for p in reversed(seen):           # children first
+            try:
+                os.kill(p, signal.SIGKILL)
             except OSError:
                 pass
 
     def _quarantine(self, payload: str, cmd: str, pid: int, agent: str, container: str, now: int) -> None:
-        """Preserve the untrusted payload (URL + command) instead of letting it run."""
+        """Keep the URL + command for inspection (0600: a command line can carry a token)."""
         try:
             os.makedirs(self.quarantine_dir, exist_ok=True)
             path = os.path.join(self.quarantine_dir, f"{now}-{pid}.txt")
-            with open(path, "w", encoding="utf-8") as f:
+            with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as f:
                 f.write(f"# pipe_to_shell payload quarantined by ephor at {now}\n"
                         f"agent: {agent}\ncontainer: {container or '-'}\nurl: {payload}\ncmd: {cmd}\n")
         except OSError:
