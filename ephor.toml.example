@@ -10,8 +10,8 @@
 feed_ttl_hours = 12
 
 # Supply-chain watch: `curl … | sh` pipes untrusted remote output straight into a shell. It always alerts and
-# keeps the URL + command in <data_dir>/quarantine. Set this to also kill the pipe (its shell and children).
-# It can only stop what has not started yet, and it will break an installer you meant to run.
+# keeps the URL + command in <data_dir>/quarantine, and by default it also kills the pipe (its shell and children).
+# Set this to false to alert only. It can only stop what has not started yet, and it will break an installer you meant to run.
 # block_pipe_to_shell = true
 # quarantine_dir = "/var/lib/ephor/quarantine"
 

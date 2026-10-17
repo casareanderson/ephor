@@ -57,8 +57,8 @@ def secret_paths() -> list[str]:
 
 
 def block_pipe_to_shell() -> bool:
-    """Whether `curl … | sh` is killed as well as alerted. Off by default: ephor watches, it does not act."""
-    return bool(CONF.get("block_pipe_to_shell", False))
+    """Whether `curl … | sh` is killed as well as alerted. On by default."""
+    return bool(CONF.get("block_pipe_to_shell", True))
 
 
 def quarantine_dir() -> str:

@@ -258,6 +258,10 @@ def _pipe_run(tmp_path, monkeypatch, **kw):
     return got, killed, qdir
 
 
+def test_pipe_to_shell_blocks_by_default():
+    assert supply.config.block_pipe_to_shell() is True
+
+
 def test_pipe_to_shell_alerts_and_keeps_payload_by_default(tmp_path, monkeypatch):
     monkeypatch.setattr(supply.config, "block_pipe_to_shell", lambda: False)
     got, killed, qdir = _pipe_run(tmp_path, monkeypatch)
