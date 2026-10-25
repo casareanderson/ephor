@@ -341,6 +341,23 @@ def cmd_dnsproxy(args) -> int:
     return EXIT_OK
 
 
+def cmd_blocks(args) -> int:
+    db = store.connect()
+    rows = store.blocks(db, args.limit)
+    db.close()
+    if args.json:
+        print(json.dumps(rows, indent=1))
+        return EXIT_OK
+    if not rows:
+        print("nothing blocked yet — run 'ephor watch --loop --block'")
+        return EXIT_OK
+    print(f"{'WHEN':<10} {'AGENT':<18} {'DEST':<30} {'REASON':<16} {'FEED':<12}")
+    for r in rows:
+        print(f"{_age(r['ts']):<10} {(r['agent'] or '?')[:18]:<18} {(r['dest'] or '?')[:30]:<30} "
+              f"{(r['reason'] or '')[:16]:<16} {(r['feed'] or '')[:12]:<12}")
+    return EXIT_OK
+
+
 def cmd_baseline(args) -> int:
     db = store.connect()
     if args.action == "export":
@@ -464,6 +481,11 @@ def build_parser() -> argparse.ArgumentParser:
     dp.add_argument("--webhook", help="POST alerts to a Discord/Slack/generic JSON webhook URL")
     dp.add_argument("--syslog", action="store_true")
     dp.set_defaults(func=cmd_dnsproxy)
+
+    bl = sub.add_parser("blocks", help="what --block has enforced, with the reason for each")
+    bl.add_argument("--limit", type=int, default=100, metavar="N")
+    bl.add_argument("--json", action="store_true")
+    bl.set_defaults(func=cmd_blocks)
 
     b = sub.add_parser("baseline", help="manage the learned 'normal destinations' baseline")
     b.add_argument("action", choices=["export", "reset"])

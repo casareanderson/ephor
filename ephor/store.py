@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS packages (
   first_seen INTEGER, gone_at INTEGER, baseline INTEGER DEFAULT 0, agents TEXT DEFAULT '', flags TEXT DEFAULT '',
   PRIMARY KEY (root, manager, name, version, location)
 );
+CREATE TABLE IF NOT EXISTS blocks (
+  ts INTEGER, agent TEXT, dest TEXT, ip TEXT, reason TEXT, feed TEXT, indicator TEXT, cmd TEXT DEFAULT ''
+);
 CREATE INDEX IF NOT EXISTS conns_agent ON conns(agent);
 CREATE INDEX IF NOT EXISTS conns_bad ON conns(bad);
 """
@@ -93,6 +96,15 @@ def record_conn(db, agent, dest, ip, port, ts, bytes_recv, bad=False, feed="") -
              feed=CASE WHEN excluded.bad=1 THEN excluded.feed ELSE feed END""",
         (agent, dest, ip, port, ts, ts, bytes_recv, int(bad), feed),
     )
+
+
+def record_block(db, agent, dest, ip, reason, feed, indicator, cmd, ts) -> None:
+    db.execute("INSERT INTO blocks(ts,agent,dest,ip,reason,feed,indicator,cmd) VALUES(?,?,?,?,?,?,?,?)",
+               (ts, agent, dest, ip, reason, feed, indicator, cmd))
+
+
+def blocks(db, limit: int = 100) -> list[dict]:
+    return [dict(r) for r in db.execute("SELECT * FROM blocks ORDER BY ts DESC LIMIT ?", (limit,))]
 
 
 def record_alert(db, agent, dest, ip, feed, indicator, ts) -> None:

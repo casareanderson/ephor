@@ -243,22 +243,24 @@ class WebhookSink:
             print(f"ephor: webhook send failed: {type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
 
 
-def block_ip(ip: str) -> str:
-    """Opt-in enforcement: add an nftables drop rule for one address. Returns what happened (never raises).
-    Detect-only by default — this only runs when `--block` is passed and nft + root are present."""
+def block_ip(ip: str, reason: str = "") -> str:
+    """Opt-in enforcement: add an nftables drop rule for one address, with `reason` as an nft `comment` so
+    every rule on the firewall is self-explanatory. Returns what happened (never raises). Detect-only by
+    default — this only runs when `--block` is passed and nft + root are present."""
     import shutil as _sh, subprocess as _sp
     if not _sh.which("nft"):
         return "nft not installed (not blocked)"
-    p = _sp.run(["nft", "add", "rule", "inet", "filter", "ephor-block", "ip", "saddr", ip, "drop"],
-                capture_output=True, text=True, timeout=30)
+    rule = ["nft", "add", "rule", "inet", "filter", "ephor-block", "ip", "saddr", ip, "drop"]
+    if reason:
+        rule += ["comment", f"ephor: {reason[:120]}"]
+    p = _sp.run(rule, capture_output=True, text=True, timeout=30)
     if p.returncode == 0:
         return "blocked (nftables)"
     # table/chain may not exist yet — create them, then retry the rule once
     _sp.run(["nft", "add", "table", "inet", "filter"], capture_output=True, timeout=30)
     _sp.run(["nft", "add", "chain", "inet", "filter", "ephor-block", "{ type filter hook output priority 0 ; }"],
             capture_output=True, text=True, timeout=30)
-    p = _sp.run(["nft", "add", "rule", "inet", "filter", "ephor-block", "ip", "saddr", ip, "drop"],
-                capture_output=True, text=True, timeout=30)
+    p = _sp.run(rule, capture_output=True, text=True, timeout=30)
     return "blocked (nftables)" if p.returncode == 0 else f"block failed: {(p.stderr or '').strip()[-120:]}"
 
 
@@ -311,7 +313,9 @@ def run_loop(args) -> int:
         if not ip:
             store.record_alert(db, agent, dest, ip, reason, detail[:200], now)
         if block_enabled and reason == KNOWN_BAD and ip:
-            print(f"ephor: {block_ip(ip)}: {ip} ({agent})", flush=True)
+            why = (f"{feed}:{indicator}" if feed else reason).strip()
+            print(f"ephor: {block_ip(ip, agent + ' ' + why)}: {ip} ({agent} · {why})", flush=True)
+            store.record_block(db, agent, dest, ip, reason, feed, indicator, cmd, now)
         alert = Alert(ts=now, host=host, container=container, agent=agent, client=client,
                       crawler=is_crawler(client), dest=dest, ip=ip, port=port, bytes_recv=bytes_recv,
                       reason=reason, category=dest_category(dest), indicator=indicator, feed=feed, via=via,
