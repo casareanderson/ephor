@@ -358,7 +358,7 @@ permissions view at your real secret files, or set up the anomaly watch's alert 
 
 ## The warden family
 
-Three tools, one job: knowing what's actually happening on your homelab. Each one runs on its own, and warden is
+Five tools, one job: knowing what's actually happening on your homelab. Each one runs on its own, and warden is
 the big brother that brings it all into one place.
 
 | Tool | Watches | Runs as |
@@ -366,8 +366,10 @@ the big brother that brings it all into one place.
 | **[warden](https://github.com/casareanderson/warden)** | The whole estate: intrusions, bans, vulnerabilities, patches and AI agents, in one console you review and approve from | A server + web console |
 | **[sieve](https://github.com/casareanderson/sieve)** | Known vulnerabilities in packages, container images and lockfiles (OSV.dev + CISA KEV + EPSS) | A CLI or GitHub Action: `pipx install sieve-scan` |
 | **[ephor](https://github.com/casareanderson/ephor)** | What the AI agents on a Linux box connect to, download and can access | A dependency-free CLI that runs down to a Pi Zero |
+| **[proctor](https://github.com/casareanderson/proctor)** | Reviews a git diff and reports what's wrong, fact-checked so it never points at code that isn't in the patch | A CLI: `git diff | proctor diff -` |
+| **[farrier](https://github.com/casareanderson/farrier)** | Applies the patches sieve finds — plan, snapshot, apply, rollback — with your approval | A CLI: `farrier plan root@box` |
 
-sieve and ephor both started life inside warden and were pulled out so you can use just the piece you need.
+The four standalone tools — sieve, ephor, proctor and farrier — all started life inside warden and were pulled out so you can use just the piece you need.
 
 ## Development
 
