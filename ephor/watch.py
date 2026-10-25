@@ -168,6 +168,7 @@ class Alert:
     feed: str = ""
     via: str = ""
     detail: str = ""
+    cmd: str = ""          # the command line that opened the connection (the "tool call")
 
     def as_dict(self) -> dict:
         return {
@@ -176,6 +177,7 @@ class Alert:
             "dest": self.dest, "ip": self.ip, "port": self.port,
             "bytes_recv": self.bytes_recv, "reason": self.reason,
             "category": self.category, "indicator": self.indicator, "feed": self.feed, "detail": self.detail,
+            "cmd": self.cmd,
         }
 
 
@@ -186,9 +188,10 @@ def format_line(a: Alert) -> str:
         return f"ephor: {a.reason.upper()} {who} {a.agent}{via} -> {a.dest}" + (f" ({a.detail})" if a.detail else "")
     cat = f" [{a.category}]" if a.category else ""
     extra = f" ({a.feed}:{a.indicator})" if a.feed else ""
+    cmd = f" | {a.cmd[:160]}" if a.cmd else ""
     return (f"ephor: {a.reason.upper()} {who} {a.agent}{via} ({a.client}"
             f"{', crawler' if a.crawler else ''}) -> {a.dest}:{a.port}{cat}"
-            f" {a.bytes_recv} bytes{extra}")
+            f" {a.bytes_recv} bytes{extra}{cmd}")
 
 
 class StdoutSink:
@@ -208,16 +211,22 @@ class SyslogSink:
 
 
 class WebhookSink:
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, fmt: str = "") -> None:
         if not url.lower().startswith(("https://", "http://")):
             raise ValueError(f"webhook must be an http(s) URL, got {url[:40]!r}")
         self.url = url
+        self.fmt = fmt.lower()
 
     def _payload(self, a: Alert) -> bytes:
         text = format_line(a)
-        if "discord" in self.url:
+        # SIEM/Grafana: loki = Grafana Loki push API; the default (no recognised host) is the plain JSON
+        # event most SIEMs ingest directly. Set --webhook-format to override the URL sniffing.
+        if self.fmt == "loki" or (not self.fmt and "loki" in self.url):
+            body = {"streams": [{"stream": {"ephor_reason": a.reason, "agent": a.agent, "host": a.host},
+                                 "values": [[str(a.ts * 1_000_000_000), text]]}]}
+        elif self.fmt == "discord" or (not self.fmt and "discord" in self.url):
             body = {"content": text, "username": "ephor"}
-        elif "slack" in self.url:
+        elif self.fmt == "slack" or (not self.fmt and "slack" in self.url):
             body = {"text": text}
         else:
             body = a.as_dict()
@@ -234,11 +243,30 @@ class WebhookSink:
             print(f"ephor: webhook send failed: {type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
 
 
-def make_sinks(webhook: str = "", use_syslog: bool = False) -> list:
+def block_ip(ip: str) -> str:
+    """Opt-in enforcement: add an nftables drop rule for one address. Returns what happened (never raises).
+    Detect-only by default — this only runs when `--block` is passed and nft + root are present."""
+    import shutil as _sh, subprocess as _sp
+    if not _sh.which("nft"):
+        return "nft not installed (not blocked)"
+    p = _sp.run(["nft", "add", "rule", "inet", "filter", "ephor-block", "ip", "saddr", ip, "drop"],
+                capture_output=True, text=True, timeout=30)
+    if p.returncode == 0:
+        return "blocked (nftables)"
+    # table/chain may not exist yet — create them, then retry the rule once
+    _sp.run(["nft", "add", "table", "inet", "filter"], capture_output=True, timeout=30)
+    _sp.run(["nft", "add", "chain", "inet", "filter", "ephor-block", "{ type filter hook output priority 0 ; }"],
+            capture_output=True, text=True, timeout=30)
+    p = _sp.run(["nft", "add", "rule", "inet", "filter", "ephor-block", "ip", "saddr", ip, "drop"],
+                capture_output=True, text=True, timeout=30)
+    return "blocked (nftables)" if p.returncode == 0 else f"block failed: {(p.stderr or '').strip()[-120:]}"
+
+
+def make_sinks(webhook: str = "", use_syslog: bool = False, fmt: str = "") -> list:
     sinks: list = [StdoutSink()]
     if webhook:
         try:
-            sinks.append(WebhookSink(webhook))
+            sinks.append(WebhookSink(webhook, fmt))
         except ValueError as e:
             raise SystemExit(f"ephor: {e}") from None
     if use_syslog:
@@ -256,9 +284,14 @@ def run_loop(args) -> int:
     large_bytes = int(conf["large_transfer_bytes"])
     webhook = args.webhook or conf["webhook"] or ""
     use_syslog = bool(args.syslog or conf["syslog"])
-    sinks = make_sinks(webhook, use_syslog)
+    webhook_fmt = getattr(args, "webhook_format", "") or ""
+    sinks = make_sinks(webhook, use_syslog, webhook_fmt)
 
     matcher = None if args.no_feeds else feeds.Matcher()
+    block_enabled = bool(getattr(args, "block", False))
+    if block_enabled and os.geteuid() != 0:
+        print("ephor: --block needs root; running detect-only", file=sys.stderr)
+        block_enabled = False
     db = store.connect()
     baseline = Baseline.load(db)
     alerted: set[tuple] = set()
@@ -268,7 +301,7 @@ def run_loop(args) -> int:
     in_warmup = True
 
     def emit(reason, *, agent, via="", container="", dest="", ip="", port=0, bytes_recv=0, client="",
-             indicator="", feed="", detail=""):
+             indicator="", feed="", detail="", cmd=""):
         if not gate(reason, in_warmup):
             return
         key = (reason, agent, dest, port)
@@ -277,14 +310,16 @@ def run_loop(args) -> int:
         alerted.add(key)
         if not ip:
             store.record_alert(db, agent, dest, ip, reason, detail[:200], now)
+        if block_enabled and reason == KNOWN_BAD and ip:
+            print(f"ephor: {block_ip(ip)}: {ip} ({agent})", flush=True)
         alert = Alert(ts=now, host=host, container=container, agent=agent, client=client,
                       crawler=is_crawler(client), dest=dest, ip=ip, port=port, bytes_recv=bytes_recv,
                       reason=reason, category=dest_category(dest), indicator=indicator, feed=feed, via=via,
-                      detail=detail)
+                      detail=detail, cmd=cmd)
         for sink in sinks:
             sink.send(alert)
 
-    def on_conn(agent, via, container, ip, port, bytes_recv, client):
+    def on_conn(agent, via, container, ip, port, bytes_recv, client, cmd=""):
         dest = resolve.ptr(ip) if args.resolve else ip
         is_bad, indicator, feed = (False, "", "")
         if matcher:
@@ -298,7 +333,7 @@ def run_loop(args) -> int:
         baseline.learn(agent, dest, port)
         if reason:
             emit(reason, agent=agent, via=via, container=container, dest=dest, ip=ip, port=port,
-                 bytes_recv=bytes_recv, client=client, indicator=indicator, feed=feed)
+                 bytes_recv=bytes_recv, client=client, indicator=indicator, feed=feed, cmd=cmd)
 
     extra = None
     if getattr(args, "ebpf", False) or int(getattr(args, "inventory_every", 0) or 0) > 0:
@@ -329,7 +364,7 @@ def run_loop(args) -> int:
                 continue
             with db:
                 for c in collect.attribute(s):
-                    on_conn(c.agent, c.via, c.container, c.rip, c.rport, c.bytes_recv, client_binary(c.exe, c.cmd))
+                    on_conn(c.agent, c.via, c.container, c.rip, c.rport, c.bytes_recv, client_binary(c.exe, c.cmd), c.cmd)
                 if extra:
                     extra.handle_events(db, now, emit, on_conn)
                     if extra.inventory_due():

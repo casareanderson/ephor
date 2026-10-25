@@ -341,6 +341,27 @@ def cmd_dnsproxy(args) -> int:
     return EXIT_OK
 
 
+def cmd_baseline(args) -> int:
+    db = store.connect()
+    if args.action == "export":
+        rows = store.baseline(db)
+        db.close()
+        if args.json:
+            print(json.dumps({"agent": [[a, d, p] for a, d, p in rows]}, indent=2))
+        else:
+            print(f"{'AGENT':<20} {'DESTINATION':<34} {'PORT':>5}")
+            for a, d, p in rows:
+                print(f"{a:<20} {d:<34} {p:>5}")
+        return EXIT_OK
+    # reset
+    if not args.json and input("Clear the learned baseline (all connection history)? type YES: ") != "YES":
+        print("not reset."); db.close(); return 1
+    store.baseline_reset(db)
+    db.close()
+    print("baseline cleared — ephor will re-learn from the next samples.")
+    return EXIT_OK
+
+
 def cmd_serve(args) -> int:
     from . import serve as _serve
     return _serve.run(args.host, args.port)
@@ -360,7 +381,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="run continuously, re-sampling and alerting on new/dangerous activity")
     w.add_argument("--interval", type=int, default=30, metavar="N",
                    help="seconds between samples in --loop mode (default 30)")
-    w.add_argument("--webhook", help="POST alerts to a Discord/Slack/generic JSON webhook URL")
+    w.add_argument("--webhook", help="POST alerts to a Discord/Slack/generic JSON/Loki webhook URL")
+    w.add_argument("--webhook-format", choices=["json", "loki", "discord", "slack"],
+                   help="force the webhook body format (default: sniffed from the URL)")
+    w.add_argument("--block", action="store_true",
+                   help="opt-in enforcement: add an nftables drop rule for each known-bad destination "
+                        "(needs root and nft; off by default — ephor is detect-only)")
     w.add_argument("--syslog", action="store_true", help="also emit alerts to syslog")
     w.add_argument("--json", action="store_true")
     w.add_argument("--ebpf", action="store_true",
@@ -438,6 +464,11 @@ def build_parser() -> argparse.ArgumentParser:
     dp.add_argument("--webhook", help="POST alerts to a Discord/Slack/generic JSON webhook URL")
     dp.add_argument("--syslog", action="store_true")
     dp.set_defaults(func=cmd_dnsproxy)
+
+    b = sub.add_parser("baseline", help="manage the learned 'normal destinations' baseline")
+    b.add_argument("action", choices=["export", "reset"])
+    b.add_argument("--json", action="store_true")
+    b.set_defaults(func=cmd_baseline)
 
     sv = sub.add_parser("serve", help="read-only HTML view (stdlib; bind to LAN only)")
     sv.add_argument("--host", default="127.0.0.1")

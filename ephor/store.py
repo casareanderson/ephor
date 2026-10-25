@@ -144,6 +144,14 @@ def alerts(db, limit: int = 500) -> list[dict]:
     ).fetchall()]
 
 
+def baseline_reset(db) -> None:
+    """Clear the learned baseline: drop connection + DNS + alert history so the box re-learns from scratch."""
+    db.execute("delete from conns")
+    db.execute("delete from dns")
+    db.execute("delete from alerts")
+    db.commit()
+
+
 def baseline(db) -> list[tuple[str, str, int]]:
     """Every (agent, dest, port) recorded so far — the 'normal' history the anomaly watch seeds its baseline from."""
     return [(r["agent"], r["dest"], r["port"]) for r in db.execute(
