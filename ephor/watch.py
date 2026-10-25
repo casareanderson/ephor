@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -252,7 +253,9 @@ def block_ip(ip: str, reason: str = "") -> str:
         return "nft not installed (not blocked)"
     rule = ["nft", "add", "rule", "inet", "filter", "ephor-block", "ip", "saddr", ip, "drop"]
     if reason:
-        rule += ["comment", f"ephor: {reason[:120]}"]
+        # nft's comment statement takes a single bare token (spaces and colons are a syntax error), so sanitise.
+        comment = "ephor-" + re.sub(r"[^A-Za-z0-9_.-]+", "-", reason[:120]).strip(".-")
+        rule += ["comment", comment]
     p = _sp.run(rule, capture_output=True, text=True, timeout=30)
     if p.returncode == 0:
         return "blocked (nftables)"
