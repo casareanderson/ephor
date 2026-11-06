@@ -338,8 +338,9 @@ permissions view at your real secret files, or set up the anomaly watch's alert 
    capabilities, and its container (best-effort).
 3. A configurable classifier turns the process into a stable **agent** label (`hermes:coder`, `ollama`,
    `langchain`, `py:myscript`, …). Noise — sshd, systemd, cron, and Claude Code itself — is ignored.
-4. Each public-internet destination is matched against the cached threat feeds and folded into a small SQLite
-   history (first/last seen, times seen, bytes received, bad flag).
+4. Each public-internet destination is matched against the cached threat feeds — by IP/CIDR, and by hostname
+   when `--resolve` reverse-resolves the IP — and folded into a small SQLite history (first/last seen, times
+   seen, bytes received, bad flag).
 5. `--perms` adds the live blast-radius snapshot for an agent that's currently running.
 
 ## Limits (read these)
