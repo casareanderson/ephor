@@ -347,7 +347,8 @@ permissions view at your real secret files, or set up the anomaly watch's alert 
 - **Point-in-time sampling.** Very short-lived connections between samples can be missed. Run on a timer.
 - **IP-first.** Passive inspection gives an IP, not the hostname/SNI the agent asked for; `--resolve` adds
   best-effort reverse DNS, which is imperfect. IP and CIDR feeds match regardless.
-- **Attribution needs privilege.** As non-root you only see your own processes' connections.
+- **Attribution needs privilege.** Run as root to attribute every user's connections; as non-root, Ephor
+  attributes only the connections owned by its own user and drops the rest, warning you that it did.
 - **Detect-only.** Ephor never blocks. If you need enforcement, pair it with a proxy or firewall.
 - **Linux only.** It depends on `/proc` and `ss`.
 

@@ -174,7 +174,11 @@ def sample() -> Sample:
 
 
 def attribute(s: Sample) -> list[AgentConn]:
-    """Join connections to processes and classify the owner. Ignored processes are dropped."""
+    """Join connections to processes and classify the owner. Ignored processes are dropped.
+
+    Attribution needs privilege: a non-root run may only see (and therefore attribute) connections owned by
+    its own user, so those owned by other users are dropped here rather than mis-attributed.
+    """
     out: list[AgentConn] = []
     resolver = lineage.Resolver()
     me = os.getpid()
@@ -185,6 +189,8 @@ def attribute(s: Sample) -> list[AgentConn]:
         if not p:
             continue
         uid, cmd, exe, cg = p
+        if not s.is_root and uid != os.geteuid():
+            continue                          # non-root: only our own processes' connections
         if classify.ignored(cmd):
             continue
         agent, via = resolver.resolve(c.pid, cmd, exe)

@@ -297,6 +297,9 @@ def run_loop(args) -> int:
     if block_enabled and os.geteuid() != 0:
         print("ephor: --block needs root; running detect-only", file=sys.stderr)
         block_enabled = False
+    if os.geteuid() != 0:
+        print("ephor: not running as root — only connections owned by this user are attributable",
+              file=sys.stderr)
     db = store.connect()
     baseline = Baseline.load(db)
     alerted: set[tuple] = set()

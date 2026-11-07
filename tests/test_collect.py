@@ -1,3 +1,5 @@
+import os
+
 from ephor import collect
 
 # Real-shape `ss -tnpiH state established` output: socket line then an indented info line.
@@ -51,3 +53,35 @@ def test_container_of():
     assert collect.container_of(1, "0::/docker/abc123def4567890") == "abc123def456"
     assert collect.container_of(1, "0::/lxc.payload.100/ns") == "lxc:100"
     assert collect.container_of(1, "0::/init.scope") == ""
+
+
+def _sample(**kw):
+    s = collect.Sample(ts=1, host="x", is_root=True, have_ss=True)
+    for k, v in kw.items():
+        setattr(s, k, v)
+    return s
+
+
+def test_non_root_drops_other_users_connections(monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    s = _sample(is_root=False)
+    s.conns = [collect.Conn(pid=99999, rip="93.184.216.34", rport=443)]
+    s.procs[99999] = (0, "/usr/bin/curl https://x", "/usr/bin/curl", "0::/")  # owned by uid 0, not us
+    assert collect.attribute(s) == []
+
+
+def test_non_root_keeps_own_connections(monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    s = _sample(is_root=False)
+    s.conns = [collect.Conn(pid=99998, rip="93.184.216.34", rport=443)]
+    s.procs[99998] = (1000, "/usr/bin/python3 /srv/agent.py", "/usr/bin/python3", "0::/")
+    got = collect.attribute(s)
+    assert len(got) == 1 and got[0].uid == 1000
+
+
+def test_root_attributes_all_users_connections(monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    s = _sample(is_root=True)
+    s.conns = [collect.Conn(pid=99997, rip="93.184.216.34", rport=443)]
+    s.procs[99997] = (1000, "/usr/bin/python3 /srv/agent.py", "/usr/bin/python3", "0::/")
+    assert len(collect.attribute(s)) == 1
