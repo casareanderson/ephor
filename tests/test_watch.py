@@ -201,3 +201,50 @@ def test_webhook_rejects_non_http_schemes():
         with pytest.raises(SystemExit):
             watch.make_sinks(bad)
     assert len(watch.make_sinks("https://discord.com/api/webhooks/1/x")) == 2
+
+
+# --- opt-in enforcement (--block) -------------------------------------------
+
+def test_block_ip_no_nft(monkeypatch):
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    assert watch.block_ip("1.2.3.4") == "nft not installed (not blocked)"
+
+
+def test_block_ip_adds_drop_rule_with_sanitised_comment(monkeypatch):
+    import shutil
+    import subprocess
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/nft")
+
+    def fake_run(rule, **kw):
+        calls.append(list(rule))
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert watch.block_ip("203.0.113.61", "scraper feodo:203.0.113.61") == "blocked (nftables)"
+    rule = calls[0]
+    assert rule[:7] == ["nft", "add", "rule", "inet", "filter", "ephor-block", "ip"]
+    assert "203.0.113.61" in rule and "drop" in rule
+    comment = rule[-1]
+    assert comment.startswith("ephor-") and " " not in comment and ":" not in comment
+
+
+def test_block_ip_creates_table_and_chain_then_retries(monkeypatch):
+    import shutil
+    import subprocess
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/nft")
+
+    def fake_run(rule, **kw):
+        calls.append(list(rule))
+        return SimpleNamespace(returncode=0 if len(calls) == 4 else 1, stderr="boom")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert watch.block_ip("203.0.113.61") == "blocked (nftables)"
+    assert len(calls) == 4
+    assert calls[1] == ["nft", "add", "table", "inet", "filter"]
+    assert calls[2][:5] == ["nft", "add", "chain", "inet", "filter"]
+    assert calls[3][:6] == ["nft", "add", "rule", "inet", "filter", "ephor-block"]
