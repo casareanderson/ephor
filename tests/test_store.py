@@ -45,6 +45,17 @@ def test_history_filters():
     db.close()
 
 
+def test_record_block_and_list():
+    db = store.connect()
+    ts = int(time.time())
+    with db:
+        store.record_block(db, "scraper", "evil.test", "1.2.3.4", "known_bad", "feodo", "1.2.3.4", "curl", ts)
+    rows = store.blocks(db)
+    assert len(rows) == 1
+    assert rows[0]["ip"] == "1.2.3.4" and rows[0]["feed"] == "feodo" and rows[0]["reason"] == "known_bad"
+    db.close()
+
+
 def test_stats():
     db = store.connect()
     ts = int(time.time())

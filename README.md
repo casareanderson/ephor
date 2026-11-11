@@ -5,8 +5,9 @@ downloaded, whether it touched a known-bad destination, and what each agent can 
 
 Ephor doesn't sit in your agents' traffic. It reads the kernel's own socket table (`ss`) and `/proc`, so it
 sees **every** outbound connection an agent makes regardless of how that agent was configured to route — there
-is no proxy to set up and nothing for an agent to opt out of or route around. It's **detect-only by design**:
-it reports, it never blocks, kills, or firewalls anything.
+is no proxy to set up and nothing for an agent to opt out of or route around. It's **detect-only by default**:
+it reports, and only acts when you explicitly opt in — `watch --loop --block` adds an nftables drop rule for
+each known-bad destination, and `block_pipe_to_shell` kills `curl | sh` pipes.
 
 Part of the [warden family](#the-warden-family): use it on its own, or alongside [warden](https://github.com/casareanderson/warden) and [sieve](https://github.com/casareanderson/sieve).
 
@@ -91,13 +92,14 @@ a Pi Zero 2 W (512 MB) handles it comfortably on a one-minute timer.
 | Setup | none — reads `/proc` | configure every agent to use the proxy | install an agent/service |
 | Sees non-cooperating traffic | **yes** (socket table) | no — only what's routed through it | yes |
 | Bypassable by a compromised agent | **no** | yes (route around the proxy) | varies |
-| Blocks traffic | no (detect-only) | yes (that's the point) | sometimes |
+| Blocks traffic | opt-in (`--block`) | yes (that's the point) | sometimes |
 | Dependencies | **none** | proxy runtime + config | heavier stack |
 | Shows per-agent permissions | **yes** | no | partial |
 | Platform focus | Linux / homelab | cross-platform | often Windows/desktop-first |
 
-Ephor is **complementary** to an inline proxy, not a replacement: if you want to *block* egress, use a proxy;
-if you want to *see everything, including what the proxy can't*, and understand blast radius, add Ephor.
+Ephor is **complementary** to an inline proxy, not a replacement: if you want to *block arbitrary* egress, use
+a proxy; if you want to *block just the known-bad destinations*, `--block` does that with nftables; and if you
+want to *see everything, including what the proxy can't*, and understand blast radius, add Ephor.
 
 ## Install
 
@@ -118,10 +120,12 @@ ephor watch --resolve       # also reverse-DNS destinations (best-effort)
 ephor watch --loop          # real-time: re-sample on an interval, alerting on new/dangerous activity
 ephor watch --loop --interval 15                  # ...every 15 s
 ephor watch --loop --webhook https://discord.com/api/webhooks/...   # push alerts to a webhook
+ephor watch --loop --block           # opt-in enforcement: nftables drop rule per known-bad destination
 ephor agents                # every agent seen, with download totals and bad-destination counts
 ephor agent ollama          # one agent's destinations
 ephor agent scraper --perms # ...plus its blast radius (user, caps, sudo, readable secrets)
 ephor history --bad         # every known-bad destination ever recorded
+ephor blocks                # what --block has enforced, with the reason for each
 ephor status                # database + feed summary
 ephor feeds --refresh       # update the threat-feed cache now
 ephor serve                 # read-only HTML view on 127.0.0.1:8799 (stdlib only)
@@ -197,7 +201,8 @@ large_transfer_bytes = 1048576
 
 A coding agent's riskiest moment is rarely a connection it makes itself. It's the `pip install` it runs, the
 `curl … | sh` it pastes, or the package name it half-remembers that someone has since registered. v0.3 watches
-those. Everything here is still detect-only: nothing is blocked, nothing is executed on Ephor's behalf.
+those. Everything here is passive by default: nothing is blocked except the `curl | sh` pipe when
+`block_pipe_to_shell` is on (its default), and nothing is executed on Ephor's behalf.
 
 **Who started it.** Every process is followed up its parent chain to an agent Ephor recognises, so a `pip`
 talking to PyPI is reported as `opencode via pip`, not as a stray `other:pip`. This works in the default
@@ -348,7 +353,9 @@ permissions view at your real secret files, or set up the anomaly watch's alert 
 - **IP-first.** Passive inspection gives an IP, not the hostname/SNI the agent asked for; `--resolve` adds
   best-effort reverse DNS, which is imperfect. IP and CIDR feeds match regardless.
 - **Attribution needs privilege.** As non-root you only see your own processes' connections.
-- **Detect-only.** Ephor never blocks. If you need enforcement, pair it with a proxy or firewall.
+- **Detect-only by default.** Ephor reports and never blocks — unless you opt in: `watch --loop --block` adds an
+  nftables drop rule for each known-bad destination (needs root and `nft`), and `block_pipe_to_shell` kills
+  `curl | sh` pipes. For broader enforcement, still pair it with a proxy or firewall.
 - **Linux only.** It depends on `/proc` and `ss`.
 
 ## Roadmap
